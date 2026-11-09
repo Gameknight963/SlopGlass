@@ -31,19 +31,13 @@ class StringPool:
         return offset
 
     def cpp_literal(self) -> str:
-        pieces: list[str] = []
-        for byte in self.data:
-            if byte == 0:
-                pieces.append("\\0")
-            elif byte == 0x5C:
-                pieces.append("\\\\")
-            elif byte == 0x22:
-                pieces.append('\\"')
-            elif 0x20 <= byte < 0x7F:
-                pieces.append(chr(byte))
-            else:
-                pieces.append(f"\\x{byte:02x}")
-        return '"' + "".join(pieces) + '"'
+        pieces: list[str] = ["{"]
+        for i, byte in enumerate(self.data):
+            if i % 20 == 0:
+                pieces.append("\n\t\t")
+            pieces.append(f"{byte}, ")
+        pieces.append("\n\t}")
+        return "".join(pieces)
 
 
 def condition_lines(condition: str | None, lines: Iterable[str]) -> list[str]:
