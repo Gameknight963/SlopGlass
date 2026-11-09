@@ -1,6 +1,6 @@
 #include "pch.h"
 #include "HookHelper.hpp"
-#include "uDWMProjection.hpp"
+#include "uDwmProjection.hpp"
 #include "dwmcoreProjection.hpp"
 #include "Shared.hpp"
 #include "GlassKernel.hpp"
@@ -8,6 +8,7 @@
 #include "GlassRenderer.hpp"
 #include "GlassRealizer.hpp"
 #include "D3DGlassRealizer.hpp"
+#include "GlassRenderTarget.hpp"
 #include "MaterialRealizer.hpp"
 #include "D2DPrivates.hpp"
 
@@ -293,6 +294,10 @@ HRESULT GlassRenderer::MyCColorBrush_Draw(
 					g_params.afterglow.a = 1.f;
 
 					g_params.fallback = color;
+					g_params.fallback.r *= g_params.fallback.a;
+					g_params.fallback.g *= g_params.fallback.a;
+					g_params.fallback.b *= g_params.fallback.a;
+
 					g_params.blurBalance = realizedGlassColorizationParameters.blurBalance;
 				}
 
@@ -406,37 +411,25 @@ void GlassRenderer::MyID2D1DeviceContext_FillGeometry(
 		else
 		{
 			auto& d3dGlassRealizer = std::get<CD3DGlassRealizer>(g_currentDeviceResources->m_glassRealizer);
-
-			const auto deviceTarget = g_drawingContextNoRef->GetDeviceTarget();
-			const auto deviceTexture = deviceTarget->GetDeviceTexture();
-
-			auto texture2D = deviceTexture->GetTexture2D();
-			const auto renderTargetView = deviceTarget->GetRenderTargetView();
-			const auto shaderResourceView = deviceTexture->GetShaderResourceView();
-
-			winrt::com_ptr<ID3D11Texture2D> backBufferTexture{};
-			if (!texture2D)
+			auto& target = GlassIntegrity::GetRenderTarget();
+			if (SUCCEEDED_LOG(target.Ensure(This)))
 			{
-				winrt::com_ptr<ID2D1Bitmap1> renderTargetBitmap{};
-				THROW_IF_FAILED(Util::GetTargetBitmapFromD2DContext(This, renderTargetBitmap));
-				THROW_IF_FAILED(Util::GetTextureFromD2DBitmap(renderTargetBitmap.get(), backBufferTexture));
-				texture2D = backBufferTexture.get();
+				LOG_IF_FAILED(
+					d3dGlassRealizer.Render(
+						g_drawingContextNoRef->GetD3DDevice()->GetDevice(),
+						g_drawingContextNoRef->GetD3DDevice()->GetImmediateContext(),
+						target.GetTexture(),
+						target.GetSubresource(),
+						target.GetRenderTargetView(),
+						target.GetShaderResourceView(),
+						geometry,
+						g_drawingWorldBounds,
+						g_rectangleSpan,
+						g_params,
+						g_type
+					)
+				);
 			}
-
-			LOG_IF_FAILED(
-				d3dGlassRealizer.Render(
-					g_drawingContextNoRef->GetD3DDevice()->GetDevice(),
-					g_drawingContextNoRef->GetD3DDevice()->GetImmediateContext(),
-					texture2D,
-					renderTargetView,
-					shaderResourceView,
-					geometry,
-					g_drawingWorldBounds,
-					g_rectangleSpan,
-					g_params,
-					g_type
-				)
-			);
 		}
 
 	}

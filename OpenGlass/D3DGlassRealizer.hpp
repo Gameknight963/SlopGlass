@@ -1,7 +1,6 @@
 #pragma once
 #include "framework.hpp"
 #include "cpprt.hpp"
-#include "dwmcoreProjection.hpp"
 #include "AeroEffect.hpp"
 #include "Shared.hpp"
 #include "Buffer2D.hpp"
@@ -46,6 +45,7 @@ namespace OpenGlass
 	class CD3DGlassRealizer
 	{
 		bool m_initialized{ false };
+		winrt::com_ptr<ID3DDeviceContextState> m_contextState;
 
 		float										m_sigma{ 0.f };
 		DwmHwSamples								m_dwmHwSamples{};
@@ -74,7 +74,7 @@ namespace OpenGlass
 		// first stage buffer is quarter width, full height
 		CBuffer2D									m_quarterResBuffer{};
 
-		// Fallback when the caller can't provide an SRV for the back buffer:
+		// A null source view selects a backdrop copy:
 		// copy the needed region from backBuffer into this texture and sample it in pass 1.
 		CBuffer2D							m_intermediateBuffer{};
 
@@ -147,6 +147,7 @@ namespace OpenGlass
 			ID3D11Device* device,
 			ID3D11DeviceContext* context,
 			ID3D11Texture2D* backBuffer,
+			UINT sourceSubresource,
 			ID3D11RenderTargetView* backBufferRTV,
 			ID3D11ShaderResourceView* backBufferSRV,
 			ID2D1Geometry* geometry,

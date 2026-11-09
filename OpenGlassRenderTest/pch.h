@@ -1,5 +1,5 @@
 #pragma once
+#include "../OpenGlass/pch.h"
 
-#include "framework.hpp"
-#include "cpprt.hpp"
-#include "wil.hpp"
+#pragma comment(lib, "windowsapp.lib")
+#pragma comment(lib, "windowscodecs.lib")

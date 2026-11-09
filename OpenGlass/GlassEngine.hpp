@@ -1,99 +1,35 @@
 #pragma once
 #include "framework.hpp"
 #include "cpprt.hpp"
-#include "RegistryValueResolver.hpp"
-#include "uDWMProjection.hpp"
+#include "DwmSettings.hpp"
+#include "uDwmProjection.hpp"
 
 namespace OpenGlass::GlassEngine
 {
-	enum UpdateType : UCHAR
-	{
-		None = 0,
-		Framework = 1 << 0,
-		Backdrop = 1 << 1,
-		Theme = 1 << 2,
-		Hook = 1 << 3,
-		All = Backdrop | Framework
-	};
+	using DwmSettings::UpdateType;
 
 	HKEY GetDwmKey();
+	HKEY GetMachineDwmKey();
 	HKEY GetPersonalizeKey();
 
-	// Long-term compatibility contract for transformation packs and plug-ins:
-	// runtime reads always prefer the current user's DWM value, then fall back
-	// to the machine value. The GUI's canonical write scope must not alter this.
-	FORCEINLINE std::optional<DWORD> TryGetDwordFromRegistry(PCWSTR keyName)
+	inline DWORD GetDwordFromRegistry(PCWSTR keyName, DWORD defaultValue = 0) noexcept
 	{
-		HRESULT hr{ S_OK };
-		DWORD value{};
-		hr = wil::reg::get_value_dword_nothrow(
-			GetDwmKey(),
-			keyName,
-			&value
-		);
-		if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
-		{
-			hr = wil::reg::get_value_dword_nothrow(
-				HKEY_LOCAL_MACHINE,
-				L"Software\\Microsoft\\Windows\\DWM",
-				keyName,
-				&value
-			);
-		}
-		if (FAILED(hr))
-		{
-			return std::nullopt;
-		}
-
-		return value;
+		return DwmSettings::GetDword(GetDwmKey(), GetMachineDwmKey(), keyName, defaultValue);
 	}
 
-	FORCEINLINE DWORD GetDwordFromRegistry(PCWSTR keyName, DWORD defaultValue = 0)
-	{
-		HRESULT hr{ S_OK };
-		DWORD value{ defaultValue };
-		hr = wil::reg::get_value_dword_nothrow(
-			GetDwmKey(),
-			keyName,
-			&value
-		);
-		if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
-		{
-			hr = wil::reg::get_value_dword_nothrow(
-				HKEY_LOCAL_MACHINE,
-				L"Software\\Microsoft\\Windows\\DWM",
-				keyName,
-				&value
-			);
-		}
-
-		return value;
-	}
-
-	DWORD GetOverridableDwordFromRegistry(
+	inline DWORD GetOverridableDwordFromRegistry(
 		PCWSTR baseKeyName,
 		PCWSTR overrideKeyName,
 		DWORD defaultValue = 0
-	);
+	) noexcept
+	{
+		return DwmSettings::GetOverridableDword(GetDwmKey(), GetMachineDwmKey(), baseKeyName, overrideKeyName, defaultValue);
+	}
 
 	template <size_t Length>
-	FORCEINLINE void GetStringFromRegistry(PCWSTR keyName, WCHAR(&returnValue)[Length])
+	inline void GetStringFromRegistry(PCWSTR keyName, WCHAR(&value)[Length]) noexcept
 	{
-		HRESULT hr{ S_OK };
-		hr = wil::reg::get_value_string_nothrow(
-			GetDwmKey(),
-			keyName,
-			returnValue
-		);
-		if (hr == HRESULT_FROM_WIN32(ERROR_FILE_NOT_FOUND))
-		{
-			hr = wil::reg::get_value_string_nothrow(
-				HKEY_LOCAL_MACHINE,
-				L"Software\\Microsoft\\Windows\\DWM",
-				keyName,
-				returnValue
-			);
-		}
+		DwmSettings::GetString(GetDwmKey(), GetMachineDwmKey(), keyName, value);
 	}
 
 	void LoadRegistry(bool redrawNow = true);

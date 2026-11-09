@@ -35,51 +35,61 @@
   </ImportGroup>
   <ItemDefinitionGroup>
     <Link>
-      <AdditionalDependencies>comctl32.lib;rpcrt4.lib;winmm.lib;advapi32.lib;wsock32.lib;uxtheme.lib;powrprof.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>comctl32.lib;rpcrt4.lib;winmm.lib;advapi32.lib;wsock32.lib;uxtheme.lib;ntdll.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <UACExecutionLevel>AsInvoker</UACExecutionLevel>
     </Link>
     <ClCompile>
       <RuntimeTypeInfo>true</RuntimeTypeInfo>
-	  <AdditionalIncludeDirectories>..\Common;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
-      <!-- Define WXUSINGDLL if linking against DLL version of wxWidgets, but we used VcpkgUseStatic=true -->
-      <!-- However, vcpkg might default to valid settings. -->
     </ClCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
 	<ClInclude Include="ColorizationPresets.hpp" />
-	<ClInclude Include="ColorSwatchButton.hpp" />
+	<ClInclude Include="EditorScope.hpp" />
+	<ClInclude Include="PreviewJournal.hpp" />
+	<ClInclude Include="SettingsCatalog.hpp" />
+	<ClInclude Include="ColorPreference.hpp" />
+	<ClInclude Include="ColorPresetList.hpp" />
     <ClInclude Include="ConfigurationMigration.hpp" />
     <ClInclude Include="Elevation.hpp" />
     <ClInclude Include="Diagnostics.hpp" />
     <ClInclude Include="OpenGlassGUI.hpp" />
     <ClInclude Include="MainFrame.hpp" />
     <ClInclude Include="PresetPackage.hpp" />
+    <ClInclude Include="ManagedFiles.hpp" />
+    <ClInclude Include="ConfigurationResources.hpp" />
     <ClInclude Include="RegistryConfig.hpp" />
+    <ClInclude Include="EffectiveConfiguration.hpp" />
     <ClInclude Include="Symbols.hpp" />
     <ClInclude Include="UiControls.hpp" />
+    <ClInclude Include="WrappingLayout.hpp" />
     <ClInclude Include="pch.h" />
     <ClInclude Include="resource.h" />
   </ItemGroup>
   <ItemGroup>
-	<ClCompile Include="..\Common\PngAssetValidation.cpp">
+	<_ExternalClCompile Include="..\Common\PngAssetValidation.cpp">
 	  <PrecompiledHeader>NotUsing</PrecompiledHeader>
-	</ClCompile>
-	<ClCompile Include="..\Common\PeCodeViewIdentity.cpp">
+	</_ExternalClCompile>
+	<_ExternalClCompile Include="..\Common\PeCodeViewIdentity.cpp">
 	  <PrecompiledHeader>NotUsing</PrecompiledHeader>
-	</ClCompile>
-	<ClCompile Include="..\Common\ThemeAtlasLayout.cpp">
+	</_ExternalClCompile>
+	<_ExternalClCompile Include="..\Common\ThemeAtlasLayout.cpp">
 	  <PrecompiledHeader>NotUsing</PrecompiledHeader>
-	</ClCompile>
-	<ClCompile Include="ColorSwatchButton.cpp" />
+	</_ExternalClCompile>
+	<ClCompile Include="ColorPresetList.cpp" />
+	<ClCompile Include="ColorPreference.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="ConfigurationMigration.cpp" />
     <ClCompile Include="Elevation.cpp" />
-    <ClCompile Include="Diagnostics.cpp" />
+    <ClCompile Include="Diagnostics.cpp"><PrecompiledHeader>NotUsing</PrecompiledHeader></ClCompile>
     <ClCompile Include="OpenGlassGUI.cpp" />
 	<ClCompile Include="MainFrame.ColorPresets.cpp" />
     <ClCompile Include="MainFrame.Presets.cpp" />
     <ClCompile Include="MainFrame.Core.cpp" />
+    <ClCompile Include="MainFrame.Configuration.cpp" />
+    <ClCompile Include="MainFrame.Diagnostics.cpp" />
+    <ClCompile Include="MainFrame.Events.cpp" />
     <ClCompile Include="MainFrame.State.cpp" />
     <ClCompile Include="MainFrame.Tabs.cpp" />
+    <ClCompile Include="ConfigurationResources.cpp" />
     <ClCompile Include="PresetPackage.cpp" />
     <ClCompile Include="RegistryConfig.cpp" />
     <ClCompile Include="Symbols.cpp" />
@@ -93,6 +103,14 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
+    <None Include="Assets\OpenGlass.svg" />
+    <None Include="Assets\OpenGlass.NOTICE.txt" />
+    <None Include="Assets\AeroShotCRE.LICENSE.txt" />
+    <None Include="Assets\window-apps-filled.original.svg" />
+    <None Include="Assets\FluentIcons.LICENSE.txt" />
+  </ItemGroup>
+  <ItemGroup>
+    <Image Include="Assets\OpenGlass.ico" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\OpenGlassHost\OpenGlassHost.vcxproj">

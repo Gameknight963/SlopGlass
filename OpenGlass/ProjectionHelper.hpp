@@ -1,5 +1,6 @@
 #pragma once
 #include "HookHelper.hpp"
+#include "ProjectionInvoke.hpp"
 #include "OSHelper.hpp"
 #include "Util.hpp"
 #include <tuple>
@@ -25,18 +26,6 @@ namespace OpenGlass::Projection
 		Unique,
 		Ambiguous
 	};
-
-	enum class SymbolFlags : UCHAR
-	{
-		None = 0,
-		DebugOnly = 1,
-		Data = 2
-	};
-	constexpr SymbolFlags operator|(SymbolFlags left, SymbolFlags right) noexcept
-	{
-		return static_cast<SymbolFlags>(std::to_underlying(left) | std::to_underlying(right));
-	}
-
 
 	struct Version
 	{
@@ -83,12 +72,12 @@ namespace OpenGlass::Projection
 		size_t minVersionIndex;
 		size_t maxVersionIndex;
 		Requirement requirement;
-		SymbolFlags flags;
+		bool debugOnly;
 	};
 
 	struct BindingSpec
 	{
-		size_t symbolIndex;
+		std::span<const size_t> symbolIndices;
 		PVOID* storage;
 		PVOID fallback;
 	};
@@ -105,6 +94,7 @@ namespace OpenGlass::Projection
 		size_t boundaryVersionIndex;
 	};
 
+	// Descriptor indices, non-overlapping ranges and physical slot groups are established by codegen.
 	class ModuleRegistry
 	{
 		LPCSTR m_name;
@@ -124,34 +114,20 @@ namespace OpenGlass::Projection
 		VersionRange m_supportedRange;
 		Version m_version{};
 		ULONG m_undecorationFailureCount{};
-		size_t m_layoutCaseCount{};
-		size_t m_symbolNameCount{};
-		size_t m_versionCount{};
 		size_t m_symbolSpecCount{};
 		size_t m_symbolCount{};
 		size_t m_knownBuildCount{};
 		size_t m_bindingCount{};
 		size_t m_layoutCount{};
-		bool m_descriptorError{};
 
 		constexpr LPCSTR String(size_t offset) const noexcept
 		{
 			return m_strings + offset;
 		}
 
-		constexpr Version VersionAt(size_t index) const noexcept
-		{
-			return index < m_versionCount ? m_versions[index] : Version{};
-		}
-
 		constexpr VersionRange RangeOf(const SymbolSpec& spec) const noexcept
 		{
-			return {VersionAt(spec.minVersionIndex), VersionAt(spec.maxVersionIndex)};
-		}
-
-		static constexpr bool HasFlag(SymbolFlags value, SymbolFlags flag) noexcept
-		{
-			return (std::to_underlying(value) & std::to_underlying(flag)) != 0;
+			return {m_versions[spec.minVersionIndex], m_versions[spec.maxVersionIndex]};
 		}
 
 		static constexpr bool IsEnabled([[maybe_unused]] const SymbolSpec& spec) noexcept
@@ -159,7 +135,7 @@ namespace OpenGlass::Projection
 #ifdef _DEBUG
 			return true;
 #else
-			return !HasFlag(spec.flags, SymbolFlags::DebugOnly);
+			return !spec.debugOnly;
 #endif
 		}
 
@@ -170,7 +146,7 @@ namespace OpenGlass::Projection
 
 		bool Matches(const SymbolSpec& spec, LPCSTR completeSymbolName) const noexcept;
 		void PublishBindings() noexcept;
-		bool CollectAddress(size_t symbolIndex, PVOID address) noexcept;
+		void CollectAddress(size_t symbolIndex, PVOID address) noexcept;
 
 	public:
 		constexpr ModuleRegistry(
@@ -194,8 +170,7 @@ namespace OpenGlass::Projection
 			  m_knownBuilds{knownBuilds.data()}, m_symbolSpecs{symbolSpecs.data()}, m_candidates{candidates.data()}, m_resolved{resolved.data()},
 			  m_resolutionStates{resolutionStates.data()}, m_bindings{bindings.data()}, m_layoutSpecs{layoutSpecs.data()},
 			  m_layoutCases{layoutCases.data()}, m_selectedOffsets{selectedOffsets.data()}, m_layoutSupported{layoutSupported.data()},
-			  m_supportedRange{supportedRange}, m_layoutCaseCount{layoutCases.size()}, m_symbolNameCount{symbolNameOffsets.size()},
-			  m_versionCount{versions.size()}, m_symbolSpecCount{symbolSpecs.size()}, m_symbolCount{candidates.size()},
+			  m_supportedRange{supportedRange}, m_symbolSpecCount{symbolSpecs.size()}, m_symbolCount{candidates.size()},
 			  m_knownBuildCount{knownBuilds.size()}, m_bindingCount{bindings.size()}, m_layoutCount{layoutSpecs.size()}
 		{
 		}
@@ -203,8 +178,8 @@ namespace OpenGlass::Projection
 		bool Freeze(Version version) noexcept;
 		void ResetSymbols() noexcept;
 		void Collect(LPCSTR completeSymbolName, PVOID address) noexcept;
-		bool CollectResolvedAddress(size_t symbolIndex, PVOID address) noexcept;
-		bool SymbolIsData(size_t symbolIndex, bool& isData) const noexcept;
+		// One prevalidated RVA per slot; collection only stages candidates for CommitModules.
+		void CollectCatalog(HMODULE module, std::span<const UINT32> rvas) noexcept;
 		void RecordUndecorationFailure() noexcept;
 		bool ValidateSymbols() const noexcept;
 		void CommitSymbols() noexcept;
@@ -215,7 +190,7 @@ namespace OpenGlass::Projection
 
 		bool LayoutSupported(size_t index) const noexcept
 		{
-			return index < m_layoutCount && m_layoutSupported[index];
+			return m_layoutSupported[index];
 		}
 		LPCSTR name() const noexcept
 		{
@@ -232,10 +207,6 @@ namespace OpenGlass::Projection
 		bool RecognizesBuild(ULONG build) const noexcept
 		{
 			return std::ranges::binary_search(std::span<const ULONG>{m_knownBuilds, m_knownBuildCount}, build);
-		}
-		bool descriptor_error() const noexcept
-		{
-			return m_descriptorError;
 		}
 		size_t descriptor_count() const noexcept
 		{
@@ -363,155 +334,6 @@ namespace OpenGlass::Projection
 	{
 	};
 
-	template <typename T> struct ProjectedAbi;
-	[[noreturn]] void ProjectedFailFastCommon() noexcept;
-
-#define OPENGLASS_DEFINE_MEMBER_ABI(QUALIFIERS, THIS_TYPE)                                                           \
-	template <typename R, typename C, typename... Args> struct ProjectedAbi<R (C::*)(Args...) QUALIFIERS>            \
-	{                                                                                                                \
-		using type = R (*)(THIS_TYPE C*, Args...);                                                                     \
-		[[noreturn]] static R FailFast(THIS_TYPE C*, Args...)                                                          \
-		{                                                                                                              \
-			ProjectedFailFastCommon();                                                                                   \
-		}                                                                                                              \
-	};
-
-	OPENGLASS_DEFINE_MEMBER_ABI(, )
-	OPENGLASS_DEFINE_MEMBER_ABI(const, const)
-	OPENGLASS_DEFINE_MEMBER_ABI(noexcept, )
-	OPENGLASS_DEFINE_MEMBER_ABI(const noexcept, const)
-#undef OPENGLASS_DEFINE_MEMBER_ABI
-
-	template <typename R, typename... Args> struct ProjectedAbi<R (*)(Args...)>
-	{
-		using type = R (*)(Args...);
-		[[noreturn]] static R FailFast(Args...)
-		{
-			ProjectedFailFastCommon();
-		}
-	};
-
-	template <typename R, typename... Args> struct ProjectedAbi<R (*)(Args...) noexcept>
-	{
-		using type = R (*)(Args...) noexcept;
-		[[noreturn]] static R FailFast(Args...) noexcept
-		{
-			ProjectedFailFastCommon();
-		}
-	};
-
-	template <auto Target> using projected_abi_t = typename ProjectedAbi<decltype(Target)>::type;
-
-	template <typename T> struct FunctionPointerTraits;
-	template <typename R, typename... Args> struct FunctionPointerTraits<R (*)(Args...)>
-	{
-		using result_type = R;
-		using arguments = std::tuple<Args...>;
-	};
-	template <typename R, typename... Args> struct FunctionPointerTraits<R (*)(Args...) noexcept>
-	{
-		using result_type = R;
-		using arguments = std::tuple<Args...>;
-	};
-
-	template <typename Source, typename Target, typename = void> struct IsDiscardReturnCompatible : std::false_type
-	{
-	};
-	template <typename Source, typename Target>
-	struct IsDiscardReturnCompatible<
-		Source,
-		Target,
-		std::void_t<
-			typename FunctionPointerTraits<Source>::result_type,
-			typename FunctionPointerTraits<Source>::arguments,
-			typename FunctionPointerTraits<Target>::result_type,
-			typename FunctionPointerTraits<Target>::arguments
-		>
-	> : std::bool_constant<
-		!std::is_void_v<typename FunctionPointerTraits<Source>::result_type> &&
-		std::is_void_v<typename FunctionPointerTraits<Target>::result_type> &&
-		std::same_as<
-			typename FunctionPointerTraits<Source>::arguments,
-			typename FunctionPointerTraits<Target>::arguments
-		>
-	>
-	{
-	};
-
-	template <typename SourceTuple, typename TargetTuple, size_t... Indices>
-	consteval bool IsTuplePrefix(std::index_sequence<Indices...>)
-	{
-		return (std::same_as<
-			std::tuple_element_t<Indices, SourceTuple>,
-			std::tuple_element_t<Indices, TargetTuple>
-		> && ...);
-	}
-
-	template <typename Source, typename Target, typename = void> struct IsExtraTrailingArgumentCompatible : std::false_type
-	{
-	};
-	template <typename Source, typename Target>
-	struct IsExtraTrailingArgumentCompatible<
-		Source,
-		Target,
-		std::void_t<
-			typename FunctionPointerTraits<Source>::result_type,
-			typename FunctionPointerTraits<Source>::arguments,
-			typename FunctionPointerTraits<Target>::result_type,
-			typename FunctionPointerTraits<Target>::arguments
-		>
-	> : std::bool_constant<
-		std::same_as<
-			typename FunctionPointerTraits<Source>::result_type,
-			typename FunctionPointerTraits<Target>::result_type
-		> &&
-		(std::tuple_size_v<typename FunctionPointerTraits<Target>::arguments> ==
-		 std::tuple_size_v<typename FunctionPointerTraits<Source>::arguments> + 1) &&
-		IsTuplePrefix<
-			typename FunctionPointerTraits<Source>::arguments,
-			typename FunctionPointerTraits<Target>::arguments
-		>(std::make_index_sequence<std::tuple_size_v<typename FunctionPointerTraits<Source>::arguments>>{})
-	>
-	{
-	};
-
-	template <typename Source, typename Target>
-	inline constexpr bool is_discard_return_compatible_v = IsDiscardReturnCompatible<Source, Target>::value;
-	template <typename Source, typename Target>
-	inline constexpr bool is_extra_trailing_argument_compatible_v =
-		IsExtraTrailingArgumentCompatible<Source, Target>::value;
-
-	template <auto Target> inline projected_abi_t<Target> g_projectedSlot{};
-
-	template <auto Target> inline constexpr projected_abi_t<Target> ProjectedFailFast =
-		&ProjectedAbi<decltype(Target)>::FailFast;
-
-	template <auto Target> PVOID* ProjectedSlotStorage() noexcept
-	{
-		static_assert(sizeof(g_projectedSlot<Target>) == sizeof(PVOID));
-		return reinterpret_cast<PVOID*>(&g_projectedSlot<Target>);
-	}
-
-	template <auto Target> PVOID* ProjectedVariableStorage() noexcept
-	{
-		static_assert(std::is_pointer_v<decltype(Target)>);
-		static_assert(sizeof(*Target) == sizeof(PVOID));
-		return reinterpret_cast<PVOID*>(reinterpret_cast<ULONG_PTR>(Target));
-	}
-
-	template <typename T> PVOID ProjectedAddress(T pointer) noexcept
-	{
-		static_assert(sizeof(pointer) == sizeof(PVOID));
-		return Util::force_cast_from(pointer);
-	}
-
-	template <auto Target> inline projected_abi_t<Target>& Invoke = g_projectedSlot<Target>;
-
-#ifdef _DEBUG
-#define OPENGLASS_MUSTTAIL
-#else
-#define OPENGLASS_MUSTTAIL [[msvc::musttail]]
-#endif
 
 	template <typename T>
 	concept function_pointer = std::is_pointer_v<T> && std::is_function_v<std::remove_pointer_t<T>>;

@@ -1,0 +1,24 @@
+{
+  "layouts": [
+    {
+      "name": "IRenderTarget_GetSDRBoost",
+      "id": "IRenderTarget_GetSDRBoost",
+      "kind": "vtable_slot",
+      "type": "float (*)(const IRenderTarget*)",
+      "cases": [
+        {
+          "platform": null,
+          "ranges": [
+            {
+              "offset": 152,
+              "until": {
+                "build": 19041,
+                "revision": 0
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -2,8 +2,8 @@
 #include "resource.h"
 #include "Util.hpp"
 #include "D3DGlassRealizer.hpp"
+#include "BackdropCopy.hpp"
 #include "Shared.hpp"
-#include "DxgiPrivates.hpp"
 #include "BlurSettings.hpp"
 
 using namespace OpenGlass;
@@ -386,6 +386,15 @@ HRESULT CD3DGlassRealizer::Initialize(ID3D11Device* device)
 {
 	RETURN_IF_FAILED(CreateDeviceResources(device));
 
+	winrt::com_ptr<ID3D11Device1> device1;
+	RETURN_IF_FAILED(device->QueryInterface(device1.put()));
+	const auto featureLevel = device->GetFeatureLevel();
+	// DWM creates its D3D11 device with SINGLETHREADED.
+	RETURN_IF_FAILED(device1->CreateDeviceContextState(
+		D3D11_1_CREATE_DEVICE_CONTEXT_STATE_SINGLETHREADED,
+		&featureLevel, 1, D3D11_SDK_VERSION, __uuidof(ID3D11Device), nullptr, m_contextState.put()
+	));
+
 	m_initialized = true;
 	return S_OK;
 }
@@ -511,6 +520,7 @@ HRESULT CD3DGlassRealizer::Render(
 	ID3D11Device* device,
 	ID3D11DeviceContext* context,
 	ID3D11Texture2D* backBuffer,
+	UINT sourceSubresource,
 	ID3D11RenderTargetView* backBufferRTV,
 	ID3D11ShaderResourceView* backBufferSRV,
 	ID2D1Geometry* geometry,
@@ -522,13 +532,11 @@ HRESULT CD3DGlassRealizer::Render(
 {
 	BOOL hwProtectionEnabled = FALSE;
 	D3D11_TEXTURE2D_DESC backBufferDesc{};
-	RETURN_IF_FAILED(
-		Util::GetDescAndHwProtectionStateFromTexture(
-			backBuffer,
-			backBufferDesc,
-			hwProtectionEnabled
-		)
-	);
+	RETURN_IF_FAILED(Util::GetDescAndHwProtectionStateFromTexture(backBuffer, backBufferDesc, hwProtectionEnabled));
+	// View coordinates use the selected mip's extent, not the parent texture's.
+	const auto mip = sourceSubresource % backBufferDesc.MipLevels;
+	backBufferDesc.Width = std::max(1u, backBufferDesc.Width >> mip);
+	backBufferDesc.Height = std::max(1u, backBufferDesc.Height >> mip);
 
 	if (!m_initialized)
 	{
@@ -593,13 +601,19 @@ HRESULT CD3DGlassRealizer::Render(
 	RETURN_IF_FAILED(EnsureVertexBufferCapacity(device, verticesBlur.size(), m_vertexBuffer, m_vertexCapacityBlur));
 	RETURN_IF_FAILED(EnsureMeshBuffersCapacity(device, verticesCompose.size(), indicesCompose.size(), m_vertexBufferCompose, m_indexBufferCompose, m_vertexCapacityCompose, m_indexCapacityCompose));
 
-	Util::D3D11ContextStateGuard contextStateGuard(context);
-
+	winrt::com_ptr<ID3D11DeviceContext3> context3;
+	RETURN_IF_FAILED(context->QueryInterface(context3.put()));
+	winrt::com_ptr<ID3DDeviceContextState> previousState;
+	context3->SwapDeviceContextState(m_contextState.get(), previousState.put());
+	const auto restoreContext = wil::scope_exit([&]
 	{
-		winrt::com_ptr<ID3D11DeviceContext3> context3{};
-		RETURN_IF_FAILED(context->QueryInterface(context3.put()));
-		context3->SetHardwareProtectionState(static_cast<BOOL>(hwProtectionEnabled));
-	}
+		// The cached state must not retain borrowed targets or source views between draws.
+		ID3D11ShaderResourceView* nullSRV = nullptr;
+		context3->PSSetShaderResources(0, 1, &nullSRV);
+		context3->OMSetRenderTargets(0, nullptr, nullptr);
+		context3->SwapDeviceContextState(previousState.get(), nullptr);
+	});
+	context3->SetHardwareProtectionState(hwProtectionEnabled);
 
 	UINT stride{ sizeof(BlurVertex) };
 	UINT offset{ 0 };
@@ -681,9 +695,8 @@ HRESULT CD3DGlassRealizer::Render(
 	context->PSSetSamplers(0, 1, samplers);
 	context->RSSetState(m_rasterizerStateScissor.get());
 
-	// If the caller can't provide an SRV for the back buffer, create an intermediate SRV-capable texture
-	// and copy only the needed blur region into it. We keep coordinates identical (copy into same offset)
-	// so UVs remain unchanged.
+	// A null source view selects a sampleable backdrop copy.
+	// Copy into the same coordinates so the blur UVs remain unchanged.
 	ID3D11ShaderResourceView* pass1InputSRV = backBufferSRV;
 	if (!pass1InputSRV)
 	{
@@ -701,42 +714,43 @@ HRESULT CD3DGlassRealizer::Render(
 
 		// Avoid resource binding hazards (and we will set RTVs explicitly afterwards anyway).
 		context->OMSetRenderTargets(0, nullptr, nullptr);
-		if (rectangles.size() <= 12)
-		{
-			for (auto subRectangle : rectangles)
-			{
-				if (RectF::IntersectUnsafe(subRectangle, drawingWorldBounds))
-				{
-					subRectangle =
-					{
-						std::max(subRectangle.left - expansion, 0.f),
-						std::max(subRectangle.top - expansion, 0.f),
-						std::min(subRectangle.right + expansion, static_cast<float>(backBufferDesc.Width)),
-						std::min(subRectangle.bottom + expansion, static_cast<float>(backBufferDesc.Height))
-					};
 
-					const auto copyRegionRect = RectF::ToRectU(subRectangle);
-					Util::CopyTextureRegion(
-						context,
-						backBuffer,
-						m_intermediateBuffer.m_texture.get(),
-						copyRegionRect,
-						copyRegionRect.left,
-						copyRegionRect.top
-					);
-				}
+		// Pass 1 samples this copy directly, so the copy must contain every tap of every fragment
+		// the pass renders. The vertices are already expanded by `expansion`, and the kernel reaches
+		// a further `radius` on the right and `radius + 1` on the left: CalculateDwmHwSamples pairs
+		// the input samples (hwOffset = (i0 - radius) + w1 / (w0 + w1)) and the shader applies a
+		// -0.5 bias, so the leftmost tap lands one texel further out than the rightmost. Pass 1 is
+		// horizontal only (`offsets` are added to u alone), so y keeps the vertex-only expansion.
+		const float copyLeftMargin = expansion + static_cast<float>(m_dwmHwSamples.radius + 1);
+		const float copyRightMargin = expansion + static_cast<float>(m_dwmHwSamples.radius);
+
+		std::vector<D2D1_RECT_U> copyRectangles;
+		copyRectangles.reserve(rectangles.size());
+		for (auto subRectangle : rectangles)
+		{
+			if (RectF::IntersectUnsafe(subRectangle, drawingWorldBounds))
+			{
+				subRectangle =
+				{
+					std::max(subRectangle.left - copyLeftMargin, 0.f),
+					std::max(subRectangle.top - expansion, 0.f),
+					std::min(subRectangle.right + copyRightMargin, static_cast<float>(backBufferDesc.Width)),
+					std::min(subRectangle.bottom + expansion, static_cast<float>(backBufferDesc.Height))
+				};
+				copyRectangles.push_back(RectF::ToRectU(subRectangle));
 			}
 		}
-		else
+		CoalesceCopyRectangles(copyRectangles);
+		for (const auto& copyRegionRect : copyRectangles)
 		{
-			const auto copyRegionRect = RectF::ToRectU(samplingWorldBounds);
 			Util::CopyTextureRegion(
 				context,
 				backBuffer,
 				m_intermediateBuffer.m_texture.get(),
 				copyRegionRect,
 				copyRegionRect.left,
-				copyRegionRect.top
+				copyRegionRect.top,
+				sourceSubresource
 			);
 		}
 
@@ -834,8 +848,6 @@ HRESULT CD3DGlassRealizer::Render(
 	);
 	context->RSSetScissorRects(1, &clipRect);
 	context->DrawIndexed(static_cast<UINT>(indicesCompose.size()), 0, 0);
-	{ ID3D11ShaderResourceView* nullSRV[1] = { nullptr }; context->PSSetShaderResources(0, 1, nullSRV); }
-	context->Flush();
 
 	return S_OK;
 }

@@ -3,7 +3,7 @@
 #include "cpprt.hpp"
 #include "ProjectionHelper.hpp"
 #include "D2DPrivates.hpp"
-#include "DWM.hpp"
+#include "Dwm.hpp"
 #include "dwmcoreProjection.Offsets.hpp"
 
 namespace OpenGlass::dwmcore
@@ -357,7 +357,18 @@ namespace OpenGlass::dwmcore
 	struct CRegionShape : CShape
 	{
 		static inline PVOID* vftable{nullptr};
-		static inline PVOID dtor{nullptr};
+
+		void InitializeStorage()
+		{
+			HookHelper::get_vftable_reference_from(this) = vftable;
+			CRegionShape_RegionData.ref(this) = CRegionShape_InlineRegion.address(this);
+		}
+
+		inline void dtor()
+		{
+			OPENGLASS_MUSTTAIL
+			return Projection::Invoke<&CRegionShape::dtor>(this);
+		}
 
 		inline HRESULT BuildFromRects(const D2D1_RECT_L* buffer, UINT count)
 		{
@@ -365,46 +376,26 @@ namespace OpenGlass::dwmcore
 			return Projection::Invoke<&CRegionShape::BuildFromRects>(this, buffer, count);
 		}
 	};
-	// valid until (build, revision)
-	template <ULONG build = 0, ULONG revision = 0> struct CRegionShapeImpl
+	class CRegionShapeStorage
 	{
-		static_assert(false, "Not implemented.");
-	};
-	template <> struct CRegionShapeImpl<os::build_w10_2004, 0>
-	{
-		struct FastRegionStorage
-		{
-			ULONG_PTR data;
-			DWORD count;
-			std::byte payload[60];
-		};
+		// Native CopyShape allocates 96 bytes; GetWindowClipShape uses the same
+		// stack capacity. Private member locations belong to the typed Layouts.
+		alignas(void*) std::byte m_storage[96]{};
 
-		void* vftable;
-		void* unknown;
-		FastRegionStorage regionData;
-		ID2D1Geometry* geometry;
-		static_assert(sizeof(FastRegionStorage) == 72);
-
-		CRegionShapeImpl()
+	public:
+		CRegionShapeStorage()
 		{
-			memset(this, 0, sizeof(*this));
-			vftable = CRegionShape::vftable;
-			regionData.data = reinterpret_cast<ULONG_PTR>(&regionData.count);
+			As()->InitializeStorage();
 		}
-		~CRegionShapeImpl()
+		~CRegionShapeStorage()
 		{
-			std::invoke(Util::force_cast_to<void (CRegionShape::*)()>(CRegionShape::dtor),
-						reinterpret_cast<CRegionShape*>(this));
+			As()->dtor();
 		}
 		CRegionShape* As()
 		{
-			return reinterpret_cast<CRegionShape*>(this);
+			return reinterpret_cast<CRegionShape*>(m_storage);
 		}
 	};
-	static_assert(offsetof(CRegionShapeImpl<os::build_w10_2004>, regionData) +
-				  offsetof(CRegionShapeImpl<os::build_w10_2004>::FastRegionStorage, data) == 16);
-	static_assert(offsetof(CRegionShapeImpl<os::build_w10_2004>, regionData) +
-				  offsetof(CRegionShapeImpl<os::build_w10_2004>::FastRegionStorage, count) == 24);
 
 	class CShapePtr
 	{
@@ -549,53 +540,11 @@ namespace OpenGlass::dwmcore
 		}
 	};
 	struct IBitmapResource;
-	struct IDeviceTexture
-	{
-		inline ID3D11Texture2D* GetTexture2D() const
-		{
-			return std::invoke(IDeviceTexture_GetTexture2D.read(HookHelper::get_vftable_from(this)), this);
-		}
-		inline ID3D11ShaderResourceView* GetShaderResourceView() const
-		{
-			return std::invoke(
-				IDeviceTexture_GetShaderResourceView.read(HookHelper::get_vftable_from(this)), this);
-		}
-	};
-	struct CD3DSurface
-	{
-		inline ID3D11Texture2D* GetTexture2D() const
-		{
-			return CD3DSurface_GetTexture2D.read(this);
-		}
-		inline ID3D11ShaderResourceView* GetShaderResourceView() const
-		{
-			return CD3DSurface_GetShaderResourceView.read(this);
-		}
-		inline ID3D11RenderTargetView* GetRenderTargetView() const
-		{
-			return CD3DSurface_GetRenderTargetView.read(this);
-		}
-	};
 	struct IRenderTarget
 	{
-		inline CD3DSurface* GetTargetSurfaceNoRef() const
-		{
-			return std::invoke(IRenderTarget_GetTargetSurfaceNoRef.read(HookHelper::get_vftable_from(this)), this);
-		}
 		inline float GetSDRBoost() const
 		{
 			return std::invoke(IRenderTarget_GetSDRBoost.read(HookHelper::get_vftable_from(this)), this);
-		}
-	};
-	struct IDeviceTarget
-	{
-		inline ID3D11RenderTargetView* GetRenderTargetView() const
-		{
-			return std::invoke(IDeviceTarget_GetRenderTargetView.read(HookHelper::get_vftable_from(this)), this);
-		}
-		inline IDeviceTexture* GetDeviceTexture() const
-		{
-			return IDeviceTarget_GetDeviceTexture.mutable_address(this);
 		}
 	};
 	struct CComposeTop;
@@ -609,6 +558,7 @@ namespace OpenGlass::dwmcore
 	struct COcclusionInfo;
 	struct CCompositionSurfaceInfo;
 	struct ISwapChainRealization;
+	struct CCornerRects;
 	struct CDrawingContext
 	{
 		// since windows 10 2004
@@ -719,7 +669,7 @@ namespace OpenGlass::dwmcore
 			return MILERR_GENERIC_IGNORE;
 		}
 
-		CRegionShapeImpl<os::build_w10_2004> regionShape{};
+		CRegionShapeStorage regionShape{};
 		D2D1_RECT_L rectanglesL[4]{};
 		for (uint32_t i = 0; i < count; i++)
 		{
@@ -832,6 +782,14 @@ namespace OpenGlass::dwmcore
 	using COcclusionContext_CollectRectangleForOcclusion_20348_t = void(*)(COcclusionContext*, const D2D1_RECT_F*, bool, bool, D2D1_RECT_F*);
 	using COcclusionContext_CollectRectangleForOcclusion_26100_Pre_7840_t = void(*)(COcclusionContext*, const D2D1_RECT_F&, D2D1_RECT_F*);
 	using COcclusionContext_CollectRectangleForOcclusion_26100_7840_t = void(*)(COcclusionContext*, const D2D1_RECT_F&, bool, D2D1_RECT_F*);
+
+	// The native owner of glass occlusion differs between compositor architectures.
+	using GlassOcclusionContext = CArrayBasedCoverageSet;
+
+	inline bool IsGlassOccluded(const GlassOcclusionContext* context, const D2D1_RECT_F& coverage, int depth)
+	{
+		return context->IsCovered(coverage, depth);
+	}
 
 } // namespace OpenGlass::dwmcore
 

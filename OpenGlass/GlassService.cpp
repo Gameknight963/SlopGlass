@@ -2,6 +2,8 @@
 #include "resource.h"
 #include "Util.hpp"
 #include "GlassService.hpp"
+#include "SystemSettings.hpp"
+#include "DwmSettings.hpp"
 #include "HookHelper.hpp"
 #include "OpenGlass.hpp"
 
@@ -30,10 +32,28 @@ namespace OpenGlass::GlassService
 
 HRESULT GlassService::OpenUserRegistryForDwm(RequestBuffer& content, DWORD processId) try
 {
+	content.dwmKey = nullptr;
+	content.personalizeKey = nullptr;
 	wil::unique_handle processHandle{ OpenProcess(PROCESS_DUP_HANDLE, FALSE, processId) };
 	THROW_LAST_ERROR_IF_NULL(processHandle);
 	DWORD sessionId{ 0 };
 	THROW_IF_WIN32_BOOL_FALSE(ProcessIdToSessionId(processId, &sessionId));
+	DWORD bytesReturned{};
+	wil::unique_wtsmem_ptr<WTS_CONNECTSTATE_CLASS> state{};
+	THROW_IF_WIN32_BOOL_FALSE(
+		WTSQuerySessionInformationW(
+			WTS_CURRENT_SERVER_HANDLE,
+			sessionId,
+			WTSConnectState,
+			wil::out_param_ptr<LPWSTR*>(state),
+			&bytesReturned
+		)
+	);
+	THROW_HR_IF(HRESULT_FROM_WIN32(ERROR_INVALID_DATA), !state || bytesReturned < sizeof(WTS_CONNECTSTATE_CLASS));
+	if (*state != WTSActive)
+	{
+		return S_OK;
+	}
 	wil::unique_handle token{ nullptr };
 	THROW_IF_WIN32_BOOL_FALSE(WTSQueryUserToken(sessionId, &token));
 	wil::unique_handle duplicatedToken{ nullptr };
@@ -54,7 +74,7 @@ HRESULT GlassService::OpenUserRegistryForDwm(RequestBuffer& content, DWORD proce
 		THROW_IF_FAILED(HRESULT_FROM_WIN32(RegOpenCurrentUser(KEY_READ, &userKey)));
 	}
 	wil::unique_hkey key{ nullptr };
-	THROW_IF_FAILED(wil::reg::open_unique_key_nothrow(userKey.get(), L"Software\\Microsoft\\Windows\\DWM", key));
+	THROW_IF_FAILED(wil::reg::open_unique_key_nothrow(userKey.get(), DwmSettings::g_keyPath, key));
 	THROW_IF_WIN32_BOOL_FALSE(
 		DuplicateHandle(
 			GetCurrentProcess(),
@@ -66,7 +86,7 @@ HRESULT GlassService::OpenUserRegistryForDwm(RequestBuffer& content, DWORD proce
 			DUPLICATE_SAME_ACCESS | DUPLICATE_CLOSE_SOURCE
 		)
 	);
-	THROW_IF_FAILED(wil::reg::open_unique_key_nothrow(userKey.get(), L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", key));
+	THROW_IF_FAILED(wil::reg::open_unique_key_nothrow(userKey.get(), Util::g_personalizeKeyPath, key));
 	THROW_IF_WIN32_BOOL_FALSE(
 		DuplicateHandle(
 			GetCurrentProcess(),
@@ -129,9 +149,8 @@ HRESULT GlassService::InjectOpenGlassDLL(DWORD processId, bool inject)
 		reinterpret_cast<ULONG_PTR>(wil::GetModuleInstanceHandle())
 	);
 
-	const auto CreateRemoteThreadWithNTAPI = [&](LPTHREAD_START_ROUTINE startRoutine, void* parameter) -> wil::unique_handle
+	const auto CreateRemoteThreadWithNTAPI = [&](wil::unique_handle& threadHandle, LPTHREAD_START_ROUTINE startRoutine, void* parameter) -> HRESULT
 	{
-		wil::unique_handle threadHandle{};
 		const auto status = NtCreateThreadEx(
 			threadHandle.put(),
 			THREAD_ALL_ACCESS,
@@ -145,9 +164,14 @@ HRESULT GlassService::InjectOpenGlassDLL(DWORD processId, bool inject)
 			0,
 			nullptr
 		);
-		LOG_IF_NTSTATUS_FAILED(status);
+		RETURN_IF_NTSTATUS_FAILED_MSG(
+			status,
+			"Unable to create remote thread in process %lu at %p",
+			processId,
+			startRoutine
+		);
 
-		return threadHandle;
+		return S_OK;
 	};
 	const auto WaitForRemoteThread = [](HANDLE threadHandle, DWORD* exitCode = nullptr) -> HRESULT
 	{
@@ -165,13 +189,65 @@ HRESULT GlassService::InjectOpenGlassDLL(DWORD processId, bool inject)
 
 	if (inject)
 	{
-		const auto remoteLoadLibraryW = GetProcAddress(GetModuleHandleW(L"kernel32.dll"), "LoadLibraryW");
+		const auto kernel32 = GetModuleHandleW(L"kernel32.dll");
+		const auto remoteLoadLibraryW = GetProcAddress(kernel32, "LoadLibraryW");
+		RETURN_LAST_ERROR_IF_NULL(remoteLoadLibraryW);
+		const auto remoteFreeLibrary = GetProcAddress(kernel32, "FreeLibrary");
+		RETURN_LAST_ERROR_IF_NULL(remoteFreeLibrary);
+
+		HMODULE remoteDllBase{};
+		bool loadCompleted{};
+		auto rollbackLoad = wil::scope_exit([&]
+		{
+			if (!loadCompleted)
+			{
+				return;
+			}
+
+			// A failed lookup after LoadLibraryW must also enter rollback. Never use
+			// its thread's DWORD exit code as a pointer-sized HMODULE on x64.
+			if (!remoteDllBase)
+			{
+				remoteDllBase = HookHelper::GetRemoteModuleBase(processId, Util::g_thisModulePath.c_str());
+			}
+			if (!remoteDllBase)
+			{
+				LOG_HR_MSG(HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND),
+					"Unable to locate OpenGlass for load rollback in process %lu", processId);
+				return;
+			}
+
+			// Startup never ran: release this LoadLibraryW reference without calling
+			// Shutdown. The rollback thread executes in kernel32, not in the DLL
+			// it unloads. Never retry FreeLibrary after a thread has been created.
+			wil::unique_handle rollbackThread{};
+			const auto createResult = CreateRemoteThreadWithNTAPI(
+				rollbackThread,
+				reinterpret_cast<LPTHREAD_START_ROUTINE>(remoteFreeLibrary),
+				remoteDllBase
+			);
+			if (FAILED(createResult))
+			{
+				LOG_HR_MSG(createResult, "Unable to start OpenGlass load rollback in process %lu", processId);
+				return;
+			}
+			DWORD rollbackResult{};
+			const auto waitResult = WaitForRemoteThread(rollbackThread.get(), &rollbackResult);
+			if (FAILED(waitResult))
+			{
+				LOG_HR_MSG(waitResult, "Unable to confirm OpenGlass load rollback in process %lu", processId);
+			}
+			else if (!rollbackResult)
+			{
+				LOG_HR_MSG(E_FAIL, "Remote FreeLibrary failed during OpenGlass load rollback in process %lu", processId);
+			}
+		});
 
 		{
 			const auto pathSize = (Util::g_thisModulePath.size() + 1ull) * sizeof(WCHAR);
 			void* remotePath = VirtualAllocEx(processHandle.get(), nullptr, pathSize, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
 			RETURN_LAST_ERROR_IF_NULL(remotePath);
-			const auto remotePathCleanup = wil::scope_exit([&]
+			auto remotePathCleanup = wil::scope_exit([&]
 			{
 				LOG_IF_WIN32_BOOL_FALSE(VirtualFreeEx(processHandle.get(), remotePath, 0, MEM_RELEASE));
 			});
@@ -188,19 +264,36 @@ HRESULT GlassService::InjectOpenGlassDLL(DWORD processId, bool inject)
 			);
 			RETURN_HR_IF(E_FAIL, bytesWritten != pathSize);
 
-			const auto loadThread = CreateRemoteThreadWithNTAPI(reinterpret_cast<LPTHREAD_START_ROUTINE>(remoteLoadLibraryW), remotePath);
-			RETURN_LAST_ERROR_IF_NULL(loadThread);
+			wil::unique_handle loadThread{};
+			RETURN_IF_FAILED(
+				CreateRemoteThreadWithNTAPI(
+					loadThread,
+					reinterpret_cast<LPTHREAD_START_ROUTINE>(remoteLoadLibraryW),
+					remotePath
+				)
+			);
 			// Keep the parameter alive until LoadLibraryW returns. Terminating a loader
 			// thread can strand the target process under the loader lock.
-			RETURN_IF_FAILED(WaitForRemoteThread(loadThread.get()));
+			const auto loadWaitResult = WaitForRemoteThread(loadThread.get());
+			if (FAILED(loadWaitResult))
+			{
+				// Completion is unknown. Retain the argument rather than freeing
+				// memory that the loader may still be reading.
+				remotePathCleanup.release();
+				RETURN_IF_FAILED(loadWaitResult);
+			}
+			loadCompleted = true;
 		}
 
-		HMODULE remoteDllBase = HookHelper::GetRemoteModuleBase(processId, Util::g_thisModulePath.c_str());
+		remoteDllBase = HookHelper::GetRemoteModuleBase(processId, Util::g_thisModulePath.c_str());
 		RETURN_HR_IF_NULL(HRESULT_FROM_WIN32(ERROR_MOD_NOT_FOUND), remoteDllBase);
 
 		const auto remoteInit = reinterpret_cast<LPTHREAD_START_ROUTINE>(reinterpret_cast<uint8_t*>(remoteDllBase) + initOffset);
-		const auto initThread = CreateRemoteThreadWithNTAPI(remoteInit, nullptr);
-		RETURN_LAST_ERROR_IF_NULL(initThread);
+		wil::unique_handle initThread{};
+		RETURN_IF_FAILED(CreateRemoteThreadWithNTAPI(initThread, remoteInit, nullptr));
+		// The initialization thread may already be executing or publishing hooks.
+		// Only the normal rundown/shutdown path may unload the DLL from here on.
+		rollbackLoad.release();
 
 		// Injection is not complete until Startup has finished publishing its hooks.
 		DWORD exitCode{};
@@ -216,8 +309,8 @@ HRESULT GlassService::InjectOpenGlassDLL(DWORD processId, bool inject)
 		}
 
 		const auto remoteUninit = reinterpret_cast<LPTHREAD_START_ROUTINE>(reinterpret_cast<uint8_t*>(remoteDllBase) + uninitOffset);
-		const auto uninitThread = CreateRemoteThreadWithNTAPI(remoteUninit, nullptr);
-		RETURN_LAST_ERROR_IF_NULL(uninitThread);
+		wil::unique_handle uninitThread{};
+		RETURN_IF_FAILED(CreateRemoteThreadWithNTAPI(uninitThread, remoteUninit, nullptr));
 
 		// FreeLibraryAndExitThread marks the end of the DLL's owned lifetime.
 		DWORD exitCode{};
@@ -377,16 +470,14 @@ HRESULT GlassService::RunInjectionThread(const ThreadControl& control)
 				return true;
 			}
 
+			wil::unique_handle processHandle{ OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, processId) };
+			if (!processHandle)
 			{
-				wil::unique_handle processHandle{ OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, processId) };
-				if (!processHandle)
-				{
-					return true;
-				}
-				if (!IsDwmProcess(processHandle.get()) || g_dwmInjectionBlackList.find(processId) != g_dwmInjectionBlackList.end())
-				{
-					return true;
-				}
+				return true;
+			}
+			if (!IsDwmProcess(processHandle.get()) || g_dwmInjectionBlackList.find(processId) != g_dwmInjectionBlackList.end())
+			{
+				return true;
 			}
 
 			if (!IsOpenGlassAlreadyLoaded(processId))
@@ -395,18 +486,21 @@ HRESULT GlassService::RunInjectionThread(const ThreadControl& control)
 				const auto it = g_dwmInjectionMap.find(sessionId);
 				if (it != g_dwmInjectionMap.end())
 				{
-					const auto& [injectionTimeStamp, processHandle] = it->second;
+					const auto& [injectionTimeStamp, previousProcessHandle] = it->second;
 
 					DWORD exitCode{ 0 };
-					LOG_IF_WIN32_BOOL_FALSE(GetExitCodeProcess(processHandle.get(), &exitCode));
+					LOG_IF_WIN32_BOOL_FALSE(GetExitCodeProcess(previousProcessHandle.get(), &exitCode));
 					// DWM constantly crashes or manual fast fail triggered by user
 					if (
+						exitCode != STILL_ACTIVE &&
 						(
-							currentTimeStamp - injectionTimeStamp <= std::chrono::seconds{ 15 } &&
-							// DWM shutdown by session manager
-							exitCode != 0xD00002FE
-						) ||
-						exitCode == 0xC0000409
+							(
+								currentTimeStamp - injectionTimeStamp <= std::chrono::seconds{ 15 } &&
+								// DWM shutdown by session manager
+								exitCode != 0xD00002FE
+							) ||
+							exitCode == 0xC0000409
+						)
 					)
 					{
 						auto title = Util::GetResourceStringView<IDS_STRING101>();
@@ -439,10 +533,10 @@ HRESULT GlassService::RunInjectionThread(const ThreadControl& control)
 					}
 				}
 
-				if (const auto hresult = InjectOpenGlassDLL(processId, true); SUCCEEDED(hresult))
-				{
-					g_dwmInjectionMap.insert_or_assign(sessionId, CDwmProcessInfo{ currentTimeStamp, OpenProcess(PROCESS_QUERY_INFORMATION, FALSE, processId) });
-				}
+				// Retain the verified process before Startup can fail. Injection waits
+				// for initialization, so a startup crash must also reach the guard.
+				g_dwmInjectionMap.insert_or_assign(sessionId, CDwmProcessInfo{ currentTimeStamp, processHandle.release() });
+				LOG_IF_FAILED(InjectOpenGlassDLL(processId, true));
 			}
 
 			return true;
@@ -578,7 +672,7 @@ HRESULT GlassService::RunServerThread(const ThreadControl& control)
 {
 	RETURN_HR_IF(E_INVALIDARG, !control.readyEvent || !control.stopEvent);
 	RETURN_IF_FAILED(SetThreadDescription(GetCurrentThread(), L"OpenGlass Server Thread"));
-	RETURN_IF_WIN32_BOOL_FALSE(SetPriorityClass(GetCurrentProcess(), IDLE_PRIORITY_CLASS));
+	RETURN_IF_WIN32_BOOL_FALSE(SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_IDLE));
 
 	RETURN_IF_FAILED(RoInitialize(RO_INIT_MULTITHREADED));
 	const wil::unique_rouninitialize_call wrtScope{};

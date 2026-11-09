@@ -1,79 +1,18 @@
 #include "pch.h"
 #include "Shared.hpp"
 #include "CaptionMetricsTweaker.hpp"
+#include "CaptionMetrics.hpp"
 
 using namespace OpenGlass;
 
 namespace OpenGlass::CaptionMetricsTweaker
 {
-	void MyCButton_SendSetSize(uDWM::CButton* This, const SIZE* size);
 	HRESULT MyCTopLevelWindow_UpdateNCAreaPositionsAndSizes(uDWM::CTopLevelWindow* This);
 
-	decltype(&MyCButton_SendSetSize) g_CButton_SendSetSize_Org{ nullptr };
-	decltype(&MyCButton_SendSetSize)* g_CButton_SendSetSize_Org_Address{ nullptr };
-	HookHelper::PointerHook<&MyCButton_SendSetSize> g_CButton_SendSetSize_Hook;
 	Projection::Detour<uDWM::Symbol_CTopLevelWindow_UpdateNCAreaPositionsAndSizes, &MyCTopLevelWindow_UpdateNCAreaPositionsAndSizes> g_CTopLevelWindow_UpdateNCAreaPositionsAndSizes_Org{};
 
-	enum CaptionButtons : UINT
-	{
-		Disabled = 0,
-		WindowsVista,
-		Windows7,
-		Windows8
-	} g_captionButtons{ 0 };
-	SIZE CalculateButtonSize(int cySize, int buttonType);
-}
-
-SIZE CaptionMetricsTweaker::CalculateButtonSize(int cySize, int buttonType)
-{
-	enum
-	{
-		LoneButton = 0,
-		MinButton,
-		MaxButton,
-		CloseButton,
-	};
-
-	auto [heightRatio, loneWidthRatio, closeWidthRatio, maxWidthRatio, minWidthRatio] = std::make_tuple(0.f, 0.f, 0.f, 0.f, 0.f);
-
-	switch (g_captionButtons)
-	{
-	case CaptionButtons::WindowsVista:
-		std::tie(heightRatio, loneWidthRatio, closeWidthRatio, maxWidthRatio, minWidthRatio) =
-			std::make_tuple(0.94736844f, 2.3157895f, 2.3157895f, 1.3157895f, 1.3684211f);
-		break;
-	case CaptionButtons::Windows7:
-	default:
-		std::tie(heightRatio, loneWidthRatio, closeWidthRatio, maxWidthRatio, minWidthRatio) =
-			std::make_tuple(0.95238096f, 2.3333333f, 2.3333333f, 1.2857143f, 1.3809524f);
-		break;
-	case CaptionButtons::Windows8:
-		std::tie(heightRatio, loneWidthRatio, closeWidthRatio, maxWidthRatio, minWidthRatio) =
-			std::make_tuple(0.95454544f, 1.6363636f, 2.2272727f, 1.2272727f, 1.3181819f);
-		break;
-	}
-
-	SIZE buttonSize = { 0, static_cast<LONG>(std::round(static_cast<float>(cySize) * heightRatio)) };
-
-	switch (buttonType)
-	{
-	case CloseButton:
-		buttonSize.cx = static_cast<LONG>(std::round(static_cast<float>(cySize) * closeWidthRatio));
-		break;
-	case MaxButton:
-		buttonSize.cx = static_cast<LONG>(std::round(static_cast<float>(cySize) * maxWidthRatio));
-		break;
-	case MinButton:
-		buttonSize.cx = static_cast<LONG>(std::round(static_cast<float>(cySize) * minWidthRatio));
-		break;
-	case LoneButton:
-		buttonSize.cx = static_cast<LONG>(std::round(static_cast<float>(cySize) * loneWidthRatio));
-		break;
-	default:
-		break;
-	}
-
-	return buttonSize;
+	using CaptionMetrics::CaptionButtons;
+	CaptionButtons g_captionButtons{ 0 };
 }
 
 HRESULT CaptionMetricsTweaker::MyCTopLevelWindow_UpdateNCAreaPositionsAndSizes(uDWM::CTopLevelWindow* This)
@@ -82,6 +21,21 @@ HRESULT CaptionMetricsTweaker::MyCTopLevelWindow_UpdateNCAreaPositionsAndSizes(u
 
 	if (!g_captionButtons)
 	{
+		if (Shared::g_captionHeight.has_value())
+		{
+			// CButton's SendSetSize is a no-op. Clamp its stored size before native
+			// canvas layout updates the button's children; leave its position intact.
+			const auto captionHeight = static_cast<LONG>(Shared::g_captionHeight.value() * uDWM::CDesktopManager::GetInstance()->GetDPIValue());
+			for (int buttonType = 0; buttonType != 4; ++buttonType)
+			{
+				if (auto button = This->GetButton(buttonType))
+				{
+					auto size = button->GetSize();
+					size.cy = std::min(size.cy, captionHeight);
+					button->SetSize(&size);
+				}
+			}
+		}
 		return hr;
 	}
 
@@ -120,9 +74,9 @@ HRESULT CaptionMetricsTweaker::MyCTopLevelWindow_UpdateNCAreaPositionsAndSizes(u
 	int offsetRight = maximized ? borderMargins.cxRightWidth + 2 : (borderMargins.cxRightWidth ? borderMargins.cxRightWidth - 2 : data->GetFrameThickness() - 2);
 	int offsetTop = maximized ? visibleMargins.cyTopHeight - 1 : visibleMargins.cyTopHeight + 1;
 
-	auto closeButtonSize = loneButton ? CalculateButtonSize(cySize, 0) : CalculateButtonSize(cySize, 3);
-	auto maxButtonSize = CalculateButtonSize(cySize, 2);
-	auto minButtonSize = CalculateButtonSize(cySize, 1);
+	auto closeButtonSize = loneButton ? CaptionMetrics::CalculateButtonSize(g_captionButtons, cySize, 0) : CaptionMetrics::CalculateButtonSize(g_captionButtons, cySize, 3);
+	auto maxButtonSize = CaptionMetrics::CalculateButtonSize(g_captionButtons, cySize, 2);
+	auto minButtonSize = CaptionMetrics::CalculateButtonSize(g_captionButtons, cySize, 1);
 
 	if (UpdateButton(3, offsetRight, offsetTop, closeButtonSize) && !toolWindow)
 	{
@@ -169,21 +123,6 @@ HRESULT CaptionMetricsTweaker::MyCTopLevelWindow_UpdateNCAreaPositionsAndSizes(u
 	return hr;
 }
 
-void CaptionMetricsTweaker::MyCButton_SendSetSize(uDWM::CButton* This, const SIZE* size)
-{
-	if (Shared::g_captionHeight.has_value())
-	{
-		const SIZE replacedSize
-		{
-			size->cx,
-			std::min(size->cy, static_cast<LONG>(Shared::g_captionHeight.value() * uDWM::CDesktopManager::GetInstance()->GetDPIValue()))
-		};
-		return g_CButton_SendSetSize_Org(This, &replacedSize);
-	}
-
-	return g_CButton_SendSetSize_Org(This, size);
-}
-
 void CaptionMetricsTweaker::Update(GlassEngine::UpdateType type)
 {
 	if (type & GlassEngine::UpdateType::Theme)
@@ -199,31 +138,11 @@ void CaptionMetricsTweaker::Startup()
 		return;
 	}
 
-	const auto CVisual_SendSetOffset_Org = uDWM::Symbol_CVisual_SendSetOffset.get();
-
-	bool replaceNextFunction = false;
-	for (auto& vf : std::span{ uDWM::CButton::vftable, 32 })
-	{
-		if (vf == CVisual_SendSetOffset_Org)
-		{
-			replaceNextFunction = true;
-		}
-		if (replaceNextFunction)
-		{
-			replaceNextFunction = false;
-			g_CButton_SendSetSize_Org_Address = reinterpret_cast<decltype(g_CButton_SendSetSize_Org_Address)>(&vf);
-			g_CButton_SendSetSize_Hook.Prepare(g_CButton_SendSetSize_Org_Address, &g_CButton_SendSetSize_Org);
-			HookHelper::GetCurrentHookTransaction().Apply(g_CButton_SendSetSize_Hook);
-			break;
-		}
-	}
-
 	HookHelper::ApplyInlineHooks(
 		std::initializer_list<HookHelper::DetourInfo>
 		{
 			{ &g_CTopLevelWindow_UpdateNCAreaPositionsAndSizes_Org },
-		},
-		true
+		}
 	);
 }
 
@@ -238,14 +157,8 @@ void CaptionMetricsTweaker::Shutdown()
 		std::initializer_list<HookHelper::DetourInfo>
 		{
 			{ &g_CTopLevelWindow_UpdateNCAreaPositionsAndSizes_Org },
-		},
-		false
+		}
 	);
-
-	if (g_CButton_SendSetSize_Org)
-	{
-		HookHelper::GetCurrentHookTransaction().Apply(g_CButton_SendSetSize_Hook);
-	}
 }
 
 void CaptionMetricsTweaker::Cleanup()

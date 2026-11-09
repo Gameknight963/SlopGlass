@@ -3,7 +3,7 @@
 #include "cpprt.hpp"
 #include "ProjectionHelper.hpp"
 #include "D2DPrivates.hpp"
-#include "DWM.hpp"
+#include "Dwm.hpp"
 #include "dwmcoreProjection.Offsets.hpp"
 
 namespace OpenGlass::dwmcore
@@ -262,28 +262,6 @@ namespace OpenGlass::dwmcore
 		}
 	};
 	struct IBitmapResource;
-	struct IDeviceTexture
-	{
-		inline ID3D11Texture2D* GetTexture2D(UINT* unknown = nullptr) const
-		{
-			return IDeviceTexture_GetTexture2D.read(HookHelper::get_vftable_from(this))(this, unknown);
-		}
-		inline ID3D11ShaderResourceView* GetShaderResourceView() const
-		{
-			return IDeviceTexture_GetShaderResourceView.read(HookHelper::get_vftable_from(this))(this);
-		}
-	};
-	struct IDeviceTarget
-	{
-		inline ID3D11RenderTargetView* GetRenderTargetView() const
-		{
-			return IDeviceTarget_GetRenderTargetView.read(HookHelper::get_vftable_from(this))(this);
-		}
-		inline IDeviceTexture* GetDeviceTexture() const
-		{
-			return IDeviceTarget_GetDeviceTexture.mutable_address(this);
-		}
-	};
 	struct COverlayContext : CResource
 	{
 		struct OverlayPlaneInfo;
@@ -419,7 +397,7 @@ namespace OpenGlass::dwmcore
 	using CDrawingContext_DrawVisualTree_t = HRESULT(*)(
 		CDrawingContext*,
 		CVisualTree*,
-		const D2D1_RECT_F&,
+		const MilRect3D&,
 		const COcclusionContext*,
 		int,
 		float,
@@ -463,6 +441,14 @@ namespace OpenGlass::dwmcore
 		const CMILMatrix*,
 		const DWM::span<CVisual>&
 	);
+
+	// The native owner of glass occlusion differs between compositor architectures.
+	using GlassOcclusionContext = COcclusionContext;
+
+	inline bool IsGlassOccluded(const GlassOcclusionContext* context, const D2D1_RECT_F& coverage, int depth)
+	{
+		return context->IsOccluded(coverage, depth, true);
+	}
 
 } // namespace OpenGlass::dwmcore
 

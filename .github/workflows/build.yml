@@ -26,25 +26,32 @@ defaults:
   run:
     shell: pwsh
 
+env:
+  BUILD_CONFIGURATION: Release
+  BUILD_PLATFORM: x64
+  VCPKG_ROOT: C:\vcpkg
+  VCPKG_COMMIT: 617ef1c0c422737d117eda00a471ea1be5bad088
+  VCPKG_DEFAULT_TRIPLET: x64-windows-static
+  VCPKG_FORCE_DOWNLOADED_BINARIES: "1"
+  VCPKG_INSTALLED_DIR: ${{ github.workspace }}\vcpkg_installed
+  VCPKG_OVERLAY_TRIPLETS: ${{ github.workspace }}\.github\vcpkg-triplets
+  VCPKG_DOWNLOADS: ${{ github.workspace }}\.ci-cache\vcpkg-downloads
+  VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.ci-cache\vcpkg-binary-cache
+  VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.ci-cache\vcpkg-binary-cache,readwrite
+
 jobs:
-  verify:
-    name: verify
+  build:
+    name: build
     runs-on: windows-2025-vs2026
     timeout-minutes: 60
-    env:
-      BUILD_CONFIGURATION: Release
-      BUILD_PLATFORM: x64
-      VCPKG_ROOT: C:\vcpkg
-      VCPKG_DEFAULT_TRIPLET: x64-windows-static
-      VCPKG_INSTALLED_DIR: ${{ github.workspace }}\vcpkg_installed
-      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}\.ci-cache\vcpkg-binary-cache
-      VCPKG_BINARY_SOURCES: clear;files,${{ github.workspace }}\.ci-cache\vcpkg-binary-cache,readwrite
-
     steps:
       - name: Checkout source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+
+      - name: Prepare Python tools
+        uses: ./.github/actions/prepare-python
 
       - name: Read product version
         id: version
@@ -59,124 +66,52 @@ jobs:
               throw "OpenGlassProductVersion has an invalid format: $version"
           }
           $artifactName = "v$version-unsigned"
+          $themeExtensionArtifactName = "v$version-theme-extension-unsigned"
           "version=$version" >> $env:GITHUB_OUTPUT
           "artifact_name=$artifactName" >> $env:GITHUB_OUTPUT
+          "theme_extension_artifact_name=$themeExtensionArtifactName" >> $env:GITHUB_OUTPUT
           @"
           ## OpenGlass CI
 
           - Version: ``$version``
-          - Artifact: ``$artifactName``
-          - Signing: unsigned validation build
+          - Installer artifact (when enabled): ``$artifactName``
+          - Theme extension artifact: ``$themeExtensionArtifactName``
+          - Signing: unsigned build
           "@ >> $env:GITHUB_STEP_SUMMARY
 
-      - name: Set up MSBuild
-        uses: microsoft/setup-msbuild@30375c66a4eea26614e0d39710365f22f8b0af57 # v3.0.0
-
-      - name: Cache NuGet packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~\.nuget\packages
-            ${{ github.workspace }}\packages
-          key: ${{ runner.os }}-${{ runner.arch }}-nuget-${{ hashFiles('**/packages.config', '**/NuGet.config', 'Common/NuGet.props', 'Common/NuGet.targets') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-nuget-
-
-      - name: Determine vcpkg cache identity
-        id: vcpkg_cache_identity
-        run: |
-          $identity = "$env:ImageOS-$env:ImageVersion"
-          if ($identity -notmatch '^[A-Za-z0-9._-]+$') {
-              throw "Invalid runner image identity: $identity"
-          }
-          "value=$identity" >> $env:GITHUB_OUTPUT
-
-      - name: Cache vcpkg binary packages
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ github.workspace }}\.ci-cache\vcpkg-binary-cache
-          key: ${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg_cache_identity.outputs.value }}-v145-x64-windows-static-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'ports/**') }}
-          restore-keys: |
-            ${{ runner.os }}-${{ runner.arch }}-${{ steps.vcpkg_cache_identity.outputs.value }}-v145-x64-windows-static-
-
-      - name: Initialize cache directories
-        run: |
-          New-Item -ItemType Directory -Force -Path $env:VCPKG_DEFAULT_BINARY_CACHE | Out-Null
-
-      - name: Run Python unit tests
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          python -m unittest discover -s Scripts -p "test_*.py"
-          python -m unittest discover -s .agents/skills/maintain-dwm-offsets/tests -p "test_*.py"
-
-      - name: Validate projection symbols
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          python .agents/skills/maintain-dwm-offsets/scripts/validate_projection_symbols.py . --architecture legacy
-          python .agents/skills/maintain-dwm-offsets/scripts/validate_projection_symbols.py . --architecture milcomp
-
-      - name: Record toolchain versions
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          $msbuildVersion = (msbuild -version -nologo | Select-Object -Last 1).Trim()
-          $pythonVersion = (python --version 2>&1 | Out-String).Trim()
-          $vcpkgVersion = (& "$env:VCPKG_ROOT\vcpkg.exe" version | Select-Object -First 1).Trim()
-          @"
-
-          ### Toolchain
-
-          - Runner image: ``$env:ImageOS $env:ImageVersion``
-          - MSBuild: ``$msbuildVersion``
-          - Python: ``$pythonVersion``
-          - vcpkg: ``$vcpkgVersion``
-          "@ >> $env:GITHUB_STEP_SUMMARY
-
-      - name: Install vcpkg dependencies
-        run: |
-          $PSNativeCommandUseErrorActionPreference = $true
-          & "$env:VCPKG_ROOT\vcpkg.exe" install `
-            "--triplet=$env:VCPKG_DEFAULT_TRIPLET" `
-            "--x-manifest-root=$env:GITHUB_WORKSPACE" `
-            "--x-install-root=$env:VCPKG_INSTALLED_DIR"
+      - name: Prepare Windows build
+        uses: ./.github/actions/prepare-build
 
       - name: Build solution
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
           New-Item -ItemType Directory -Force -Path "MSBuild_Logs" | Out-Null
-          msbuild OpenGlass.slnx /m /restore `
+          msbuild OpenGlass.slnx /m `
             /p:Configuration=$env:BUILD_CONFIGURATION `
             /p:Platform=$env:BUILD_PLATFORM `
-            /p:RestorePackagesConfig=true `
             /p:VcpkgEnableManifest=true `
             /p:VcpkgManifestInstall=false `
+            /p:VcpkgAutoBootstrap=false `
             /p:VcpkgRoot=$env:VCPKG_ROOT `
             /p:VcpkgInstalledDir=$env:VCPKG_INSTALLED_DIR `
             /p:VcpkgTriplet=$env:VCPKG_DEFAULT_TRIPLET `
             /p:ForceImportBeforeCppProps=$env:VCPKG_ROOT\scripts\buildsystems\msbuild\vcpkg.props `
             /p:ForceImportAfterCppTargets=$env:VCPKG_ROOT\scripts\buildsystems\msbuild\vcpkg.targets `
             /p:OpenGlassInstallerEnabled=false `
-            /bl:MSBuild_Logs/ci.binlog
-
-      - name: Run OpenGlass unit tests
-        run: |
-          $testExecutable = "Build\x64\Release\common\OpenGlassTests.exe"
-          if (-not (Test-Path -LiteralPath $testExecutable -PathType Leaf)) {
-              throw "Test executable was not built: $testExecutable"
-          }
-          & $testExecutable
-          if ($LASTEXITCODE -ne 0) {
-              throw "OpenGlassTests failed with exit code $LASTEXITCODE."
-          }
+            /bl:MSBuild_Logs/build.binlog
 
       - name: Verify build outputs
         run: |
+          $buildRoot = "Build\$env:BUILD_PLATFORM\$env:BUILD_CONFIGURATION"
           $expected = @(
-              "Build\x64\Release\legacy\OpenGlass.dll",
-              "Build\x64\Release\milcomp\OpenGlass.dll",
-              "Build\x64\Release\common\OpenGlassHost.exe",
-              "Build\x64\Release\common\OpenGlassGUI.exe",
-              "Build\x64\Release\common\OpenGlassTests.exe",
-              "Build\x64\Release\common\OpenGlassRenderTest.exe"
+              "$buildRoot\legacy\OpenGlass.dll",
+              "$buildRoot\milcomp\OpenGlass.dll",
+              "$buildRoot\common\OpenGlassHost.exe",
+              "$buildRoot\common\OpenGlassGUI.exe",
+              "$buildRoot\common\OpenGlassThemeExtension.dll",
+              "$buildRoot\common\OpenGlassThemeExtension.pdb",
+              "$buildRoot\common\OpenGlassTests.exe",
+              "$buildRoot\common\OpenGlassRenderTest.exe"
           )
           foreach ($path in $expected) {
               $item = Get-Item -LiteralPath $path -ErrorAction Stop
@@ -185,17 +120,27 @@ jobs:
               }
           }
 
+          $extension = "$buildRoot\common\OpenGlassThemeExtension.dll"
+          $signature = Get-AuthenticodeSignature -LiteralPath $extension
+          if ($signature.Status -ne [System.Management.Automation.SignatureStatus]::NotSigned) {
+              throw "Expected an unsigned theme extension, but $extension has signature status $($signature.Status)."
+          }
+
       - name: Locate packaging tools
         id: packaging_tools
         if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.package_artifacts == true)
         run: |
           $PSNativeCommandUseErrorActionPreference = $true
-          $iscc = Get-Command ISCC.exe -ErrorAction Stop
-          python --version
-          "iscc=$($iscc.Source)" >> $env:GITHUB_OUTPUT
+          $iscc = Get-Command ISCC.exe -ErrorAction SilentlyContinue
+          if ($iscc) {
+              "iscc=$($iscc.Source)" >> $env:GITHUB_OUTPUT
+          }
+          else {
+              "Installer and symbol packaging skipped: ISCC.exe is unavailable." >> $env:GITHUB_STEP_SUMMARY
+          }
 
       - name: Package unsigned installer and symbols
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.package_artifacts == true)
+        if: steps.packaging_tools.outputs.iscc != ''
         env:
           OPENGLASS_ISCC: ${{ steps.packaging_tools.outputs.iscc }}
         run: |
@@ -203,8 +148,8 @@ jobs:
           $arguments = @(
               "Scripts\OpenGlass.Packaging.proj",
               "/m",
-              "/p:Configuration=Release",
-              "/p:Platform=x64",
+              "/p:Configuration=$env:BUILD_CONFIGURATION",
+              "/p:Platform=$env:BUILD_PLATFORM",
               "/p:BuildDependencies=false",
               "/p:OpenGlassIsccTool=$env:OPENGLASS_ISCC"
           )
@@ -214,10 +159,10 @@ jobs:
           }
 
       - name: Verify unsigned packages
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.package_artifacts == true)
+        if: steps.packaging_tools.outputs.iscc != ''
         run: |
           Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $buildRoot = "Build\x64\Release"
+          $buildRoot = "Build\$env:BUILD_PLATFORM\$env:BUILD_CONFIGURATION"
           $artifacts = @(
               "$buildRoot\OpenGlassSetup.exe",
               "$buildRoot\OpenGlassSymbols.zip"
@@ -242,8 +187,8 @@ jobs:
           }
 
           $stagedDlls = @(
-              @{ Path = "Cache\Packaging\Release\signed\legacy\OpenGlass.dll"; Architecture = "Legacy" },
-              @{ Path = "Cache\Packaging\Release\signed\milcomp\OpenGlass.dll"; Architecture = "MILComp" }
+              @{ Path = "Cache\Packaging\$env:BUILD_CONFIGURATION\signed\legacy\OpenGlass.dll"; Architecture = "Legacy" },
+              @{ Path = "Cache\Packaging\$env:BUILD_CONFIGURATION\signed\milcomp\OpenGlass.dll"; Architecture = "MILComp" }
           )
           foreach ($stagedDll in $stagedDlls) {
               $description = (Get-Item -LiteralPath $stagedDll.Path -ErrorAction Stop).VersionInfo.FileDescription
@@ -296,22 +241,33 @@ jobs:
           $PSNativeCommandUseErrorActionPreference = $true
           git diff --exit-code
 
+      - name: Upload unsigned theme extension
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.version.outputs.theme_extension_artifact_name }}
+          path: |
+            Build/${{ env.BUILD_PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/common/OpenGlassThemeExtension.dll
+            Build/${{ env.BUILD_PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/common/OpenGlassThemeExtension.pdb
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload unsigned packages
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.package_artifacts == true)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: steps.packaging_tools.outputs.iscc != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.version.outputs.artifact_name }}
+          compression-level: 0 # The installer and symbol ZIP are already compressed.
           path: |
-            Build/x64/Release/OpenGlassSetup.exe
-            Build/x64/Release/OpenGlassSymbols.zip
+            Build/${{ env.BUILD_PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OpenGlassSetup.exe
+            Build/${{ env.BUILD_PLATFORM }}/${{ env.BUILD_CONFIGURATION }}/OpenGlassSymbols.zip
           if-no-files-found: error
           retention-days: 7
 
       - name: Upload MSBuild binary log on failure
-        if: failure() && hashFiles('MSBuild_Logs/ci.binlog') != ''
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure() && hashFiles('MSBuild_Logs/build.binlog') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: msbuild-binlog-${{ github.run_id }}
-          path: MSBuild_Logs/ci.binlog
+          name: msbuild-build-${{ github.run_id }}
+          path: MSBuild_Logs/build.binlog
           if-no-files-found: ignore
           retention-days: 7

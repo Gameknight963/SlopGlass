@@ -1,12 +1,15 @@
 #include "pch.h"
 #include "HookHelper.hpp"
-#include "uDWMProjection.hpp"
+#include "uDwmProjection.hpp"
 #include "dwmcoreProjection.hpp"
 #include "Shared.hpp"
 #include "GlassKernel.hpp"
+#include "GlassInfra.hpp"
 #include "GlassRenderer.hpp"
+#include "GlassIntegrity.hpp"
 #include "GlassRealizer.hpp"
 #include "D3DGlassRealizer.hpp"
+#include "GlassRenderTarget.hpp"
 #include "ReflectionRealizer.hpp"
 #include "MaterialRealizer.hpp"
 #include "D2DPrivates.hpp"
@@ -165,7 +168,7 @@ HRESULT GlassRenderer::MyCRenderData_TryDrawCommandAsDrawList(
 {
 	const auto command = reinterpret_cast<const dwmcore::CDrawGeometryCommand*>(resources->data);
 	if (
-		GlassKernel::IsDrawGeometryCommand(commandType, resources) &&
+		GlassInfra::IsDrawGeometryCommand(commandType, resources) &&
 		(
 			(
 				HookHelper::get_vftable_from(This->GetResources()->data[command->brushIndex]) == dwmcore::CSolidColorLegacyMilBrush::vftable
@@ -404,7 +407,7 @@ HRESULT GlassRenderer::MyCDrawingContext_DrawGeometry(
 		
 		const auto expansion = GlassKernel::GetBlurExpansion();
 		const auto glassCoverageSet = CArrayBasedGlassCoverageSet::GetOrCreate(occlusionContext->GetArrayBasedCoverageSet());
-		const auto reinterpreter = GlassKernel::AlphaChannelReinterpreter(color.a);
+		const auto reinterpreter = GlassInfra::AlphaChannelReinterpreter(color.a);
 
 		// try render glass
 		if (reinterpreter.GetIsValid())
@@ -414,14 +417,12 @@ HRESULT GlassRenderer::MyCDrawingContext_DrawGeometry(
 			g_renderFlag.set(RenderFlag_Material, true);
 			g_materialContext.opacity = Shared::g_materialIntensity;
 
-			const auto overrideColor = reinterpreter.GetIsAccent() ? std::optional{ Color::scRGBTosRGB(color, 0.f) } : std::nullopt;
 			const auto realizedGlassColorizationParameters = GlassKernel::RealizeWindowColorization(
 				GlassKernel::GetBaseColor(Shared::IsTransparencyDisabled(), maximized),
-				GlassKernel::GetSourceColor(active, overrideColor),
+				GlassKernel::GetSourceColor(active),
 				GlassKernel::GetColorizationOpacity(active, maximized),
 				Shared::IsTransparencyDisabled(),
-				false,
-				overrideColor
+				false
 			);
 			color = realizedGlassColorizationParameters.GetEffectivescRGBBlendColor(sdrBoost);
 			if (!colorSpaceIsScRGB)
@@ -478,6 +479,10 @@ HRESULT GlassRenderer::MyCDrawingContext_DrawGeometry(
 					g_params.afterglow.a = 1.f;
 
 					g_params.fallback = color;
+					g_params.fallback.r *= g_params.fallback.a;
+					g_params.fallback.g *= g_params.fallback.a;
+					g_params.fallback.b *= g_params.fallback.a;
+
 					g_params.blurBalance = realizedGlassColorizationParameters.blurBalance;
 				}
 
@@ -623,55 +628,17 @@ void GlassRenderer::MyID2D1DeviceContext_FillGeometry(
 		else
 		{
 			auto& d3dGlassRealizer = std::get<CD3DGlassRealizer>(g_currentDeviceResources->m_glassRealizer);
-			if (uDWM::g_versionInfo.build < os::build_w10_2004)
+			auto& target = GlassIntegrity::GetRenderTarget();
+			if (SUCCEEDED_LOG(target.Ensure(This)))
 			{
-				const auto renderTarget = g_drawingContextNoRef->GetRenderTarget();
-				const auto d3dSurface = renderTarget->GetTargetSurfaceNoRef();
-
-				const auto texture2D = d3dSurface->GetTexture2D();
-				const auto renderTargetView = d3dSurface->GetRenderTargetView();
-				const auto shaderResourceView = d3dSurface->GetShaderResourceView();
-
 				LOG_IF_FAILED(
 					d3dGlassRealizer.Render(
 						g_drawingContextNoRef->GetD3DDevice()->GetDevice(),
 						g_drawingContextNoRef->GetD3DDevice()->GetImmediateContext(),
-						texture2D,
-						renderTargetView,
-						shaderResourceView,
-						geometry,
-						g_drawingWorldBounds,
-						g_rectangleSpan,
-						g_params,
-						g_type
-					)
-				);
-			}
-			else
-			{
-				const auto deviceTarget = g_drawingContextNoRef->GetDeviceTarget();
-				const auto deviceTexture = deviceTarget->GetDeviceTexture();
-
-				auto texture2D = deviceTexture->GetTexture2D();
-				const auto renderTargetView = deviceTarget->GetRenderTargetView();
-				const auto shaderResourceView = deviceTexture->GetShaderResourceView();
-
-				winrt::com_ptr<ID3D11Texture2D> backBufferTexture{};
-				if (!texture2D)
-				{
-					winrt::com_ptr<ID2D1Bitmap1> renderTargetBitmap{};
-					THROW_IF_FAILED(Util::GetTargetBitmapFromD2DContext(This, renderTargetBitmap));
-					THROW_IF_FAILED(Util::GetTextureFromD2DBitmap(renderTargetBitmap.get(), backBufferTexture));
-					texture2D = backBufferTexture.get();
-				}
-
-				LOG_IF_FAILED(
-					d3dGlassRealizer.Render(
-						g_drawingContextNoRef->GetD3DDevice()->GetDevice(),
-						g_drawingContextNoRef->GetD3DDevice()->GetImmediateContext(),
-						texture2D,
-						renderTargetView,
-						shaderResourceView,
+						target.GetTexture(),
+						target.GetSubresource(),
+						target.GetRenderTargetView(),
+						target.GetShaderResourceView(),
 						geometry,
 						g_drawingWorldBounds,
 						g_rectangleSpan,
@@ -770,8 +737,7 @@ void GlassRenderer::Startup()
 		{
 			{ &g_CRenderData_TryDrawCommandAsDrawList_Win10_Org, build_before_w11_21h2 },
 			{ &g_CRenderData_TryDrawCommandAsDrawList_Win11_Org, !build_before_w11_21h2 },
-		},
-		true
+		}
 	);
 }
 
@@ -783,8 +749,7 @@ void GlassRenderer::Shutdown()
 		{
 			{ &g_CRenderData_TryDrawCommandAsDrawList_Win10_Org, build_before_w11_21h2 },
 			{ &g_CRenderData_TryDrawCommandAsDrawList_Win11_Org, !build_before_w11_21h2 },
-		},
-		false
+		}
 	);
 
 	if (g_ID2D1DeviceContext_FillGeometry_Org)

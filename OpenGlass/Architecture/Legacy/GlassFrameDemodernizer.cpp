@@ -32,9 +32,9 @@ namespace OpenGlass::GlassFrameDemodernizer
 	{
 		// call ???
 		0xE8, 0x00, 0x00, 0x00, 0x00,
-		// test al, al
-		0x84, 0xC0
 	};
+	// Replace only the call. The caller can schedule other instructions before
+	// testing AL, as UpdateWindowVisuals does on 26100.9818.
 	UCHAR g_callCDesktopManager_IsHighContrastMode_replacedInstruction[]
 	{
 		// move al, 0x01
@@ -43,8 +43,6 @@ namespace OpenGlass::GlassFrameDemodernizer
 		// nop
 		// nop
 		0x90, 0x90, 0x90,
-		// test al, al
-		0x84, 0xC0
 	};
 	UCHAR g_callCTopLevelWindow_IsShadowNCAreaPart_inlined_Instructions[]
 	{
@@ -111,7 +109,10 @@ HRESULT GlassFrameDemodernizer::MyCTopLevelWindow_ValidateVisual(uDWM::CTopLevel
 
 	g_systemBackdrop = (uDWM::g_versionInfo.build == os::build_w11_21h2 && old_systemBackdropType) || (uDWM::g_versionInfo.build > os::build_w11_21h2 && old_systemBackdropType >= DWMSBT_MAINWINDOW);
 	systemBackdropType = (uDWM::g_versionInfo.build == os::build_w11_21h2 ? DWMSBT_AUTO : DWMSBT_NONE);
-	if (g_systemBackdrop)
+	if (
+		g_systemBackdrop &&
+		extendedFrameMargins.cyTopHeight == 0
+	)
 	{
 		// known issue: 
 		// set cyTopHeight to any non zero value will cause compatibility issue with Outlook (new)
@@ -269,13 +270,8 @@ void GlassFrameDemodernizer::Startup()
 	)
 	{
 		const auto sizeOffset = uDWM::CAtlasedImage_GetSize.offset();
-		FAIL_FAST_HR_IF_MSG(E_UNEXPECTED, sizeOffset < 0, "CAtlasedImage size offset is negative");
-		FAIL_FAST_HR_IF_MSG(E_UNEXPECTED, static_cast<ULONGLONG>(sizeOffset) > SIZE_MAX - sizeof(DWORD), "CAtlasedImage size offset overflows");
 
-		g_atlasedImageNullSentinel.assign(static_cast<size_t>(sizeOffset) + sizeof(DWORD), std::byte{});
-		auto atlasedImageNullSentinel =
-			reinterpret_cast<uDWM::CAtlasedImage*>(g_atlasedImageNullSentinel.data());
-		atlasedImageNullSentinel->GetSize() = 0;
+		g_atlasedImageNullSentinel.assign(static_cast<size_t>(sizeOffset) + sizeof(SIZE), std::byte{});
 	}
 
 	auto CTopLevelWindow_UpdateWindowVisuals_Instructions =
@@ -425,8 +421,7 @@ void GlassFrameDemodernizer::Startup()
 			{ &g_CTopLevelWindow_ValidateVisual_Org },
 			{ &g_CTopLevelWindow_UpdateNCAreaBackground_Org },
 			{ &g_SetMargin_Org },
-		},
-		true
+		}
 	);
 }
 
@@ -443,8 +438,7 @@ void GlassFrameDemodernizer::Shutdown()
 			{ &g_CTopLevelWindow_ValidateVisual_Org },
 			{ &g_CTopLevelWindow_UpdateNCAreaBackground_Org },
 			{ &g_SetMargin_Org },
-		},
-		false
+		}
 	);
 
 	for (auto& patch : g_instructionPatches)

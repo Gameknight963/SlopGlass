@@ -1,8 +1,10 @@
 #pragma once
 #include "framework.hpp"
 #include "cpprt.hpp"
+#include "wil.hpp"
 #include "HookHelper.hpp"
 #include "DxgiPrivates.hpp"
+#include "RectF.hpp"
 #include <winrt/windows.ui.h>
 
 namespace OpenGlass::Util
@@ -102,12 +104,6 @@ namespace OpenGlass::Util
 		return std::wstring{ GetResourceStringView<id>() };
 	}
 
-	inline void ClearMessageQueue(HWND hWnd, UINT uMsg)
-	{
-		MSG msg{};
-		while (PeekMessageW(&msg, hWnd, uMsg, uMsg, PM_REMOVE)) {}
-	}
-
 	inline HRESULT GetResDataView(std::span<const UCHAR>& resourceView, UINT id, HMODULE moduleHandle = wil::GetModuleInstanceHandle(), LPCWSTR type = RT_RCDATA)
 	{
 		const auto resourceHandle = FindResourceW(moduleHandle, MAKEINTRESOURCE(id), type);
@@ -160,19 +156,6 @@ namespace OpenGlass::Util
 		}
 
 		return false;
-	}
-
-	FORCEINLINE bool WINAPI IsTransparencyEnabled()
-	{
-		DWORD value{ 0 };
-		wil::reg::get_value_dword_nothrow(HKEY_CURRENT_USER, L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"EnableTransparency", &value);
-		return static_cast<bool>(value);
-	}
-	FORCEINLINE bool WINAPI IsTransparencyEnabled(HKEY key)
-	{
-		DWORD value{ 0 };
-		wil::reg::get_value_dword_nothrow(key, L"EnableTransparency", &value);
-		return static_cast<bool>(value);
 	}
 
 	FORCEINLINE bool WINAPI IsRunAsLocalSystem()
@@ -259,9 +242,9 @@ namespace OpenGlass::Util
 		winrt::com_ptr<IDXGISwapChain1>& dxgiSwapChain
 	)
 	{
-		winrt::com_ptr<IDXGISurface> dxgiSurface{};
-		RETURN_IF_FAILED(texture->QueryInterface(dxgiSurface.put()));
-		return dxgiSurface->GetParent(IID_PPV_ARGS(dxgiSwapChain.put()));
+		winrt::com_ptr<IDXGIResource> dxgiResource;
+		RETURN_IF_FAILED(texture->QueryInterface(dxgiResource.put()));
+		return dxgiResource->GetParent(IID_PPV_ARGS(dxgiSwapChain.put()));
 	}
 
 	inline HRESULT GetDescAndHwProtectionStateFromTexture(
@@ -292,12 +275,21 @@ namespace OpenGlass::Util
 
 	inline HRESULT GetTextureFromD2DBitmap(
 		ID2D1Bitmap1* bitmap,
-		winrt::com_ptr<ID3D11Texture2D>& texture
+		winrt::com_ptr<ID3D11Texture2D>& texture,
+		UINT* subresource = nullptr
 	)
 	{
 		winrt::com_ptr<IDXGISurface> dxgiSurface{};
 		RETURN_IF_FAILED(bitmap->GetSurface(dxgiSurface.put()));
-		RETURN_IF_FAILED(dxgiSurface->QueryInterface(texture.put()));
+		winrt::com_ptr<IDXGISurface2> subresourceSurface;
+		RETURN_IF_FAILED(dxgiSurface->QueryInterface(subresourceSurface.put()));
+		// A subresource surface is a separate object. GetResource returns its parent texture.
+		UINT index;
+		RETURN_IF_FAILED(subresourceSurface->GetResource(IID_PPV_ARGS(texture.put()), &index));
+		if (subresource)
+		{
+			*subresource = index;
+		}
 		return S_OK;
 	}
 
@@ -307,7 +299,9 @@ namespace OpenGlass::Util
 		ID3D11Texture2D* dst,
 		const D2D1_RECT_U& srcRect,
 		UINT dstX,
-		UINT dstY
+		UINT dstY,
+		UINT srcSubresource = 0,
+		UINT dstSubresource = 0
 	)
 	{
 		D3D11_BOX box{};
@@ -317,7 +311,7 @@ namespace OpenGlass::Util
 		box.bottom = srcRect.bottom;
 		box.front = 0;
 		box.back = 1;
-		context->CopySubresourceRegion(dst, 0, dstX, dstY, 0, src, 0, &box);
+		context->CopySubresourceRegion(dst, dstSubresource, dstX, dstY, 0, src, srcSubresource, &box);
 	}
 
 	inline HRESULT GetTargetBitmapFromD2DContext(
@@ -496,269 +490,6 @@ namespace OpenGlass::Util
 
 		return S_OK;
 	}
-	class D3D11ContextStateGuard
-	{
-	private:
-		winrt::com_ptr<ID3D11DeviceContext3> m_context;
-
-		// Vertex Shader State
-		winrt::com_ptr<ID3D11VertexShader> m_vs;
-		std::array<winrt::com_ptr<ID3D11Buffer>, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT> m_vsConstantBuffers;
-		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> m_vsSRVs;
-		std::array<winrt::com_ptr<ID3D11SamplerState>, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT> m_vsSamplers;
-
-		// Pixel Shader State
-		winrt::com_ptr<ID3D11PixelShader> m_ps;
-		std::array<winrt::com_ptr<ID3D11Buffer>, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT> m_psConstantBuffers;
-		std::array<winrt::com_ptr<ID3D11ShaderResourceView>, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT> m_psSRVs;
-		std::array<winrt::com_ptr<ID3D11SamplerState>, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT> m_psSamplers;
-
-		// Input Assembler State
-		winrt::com_ptr<ID3D11InputLayout> m_inputLayout;
-		D3D11_PRIMITIVE_TOPOLOGY m_primitiveTopology;
-		std::array<winrt::com_ptr<ID3D11Buffer>, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT> m_vertexBuffers;
-		std::array<UINT, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT> m_vertexStrides;
-		std::array<UINT, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT> m_vertexOffsets;
-		winrt::com_ptr<ID3D11Buffer> m_indexBuffer;
-		DXGI_FORMAT m_indexFormat;
-		UINT m_indexOffset;
-
-		// Rasterizer State
-		winrt::com_ptr<ID3D11RasterizerState> m_rasterizerState;
-		std::array<D3D11_VIEWPORT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> m_viewports;
-		UINT m_numViewports;
-		std::array<D3D11_RECT, D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE> m_scissorRects;
-		UINT m_numScissorRects;
-
-		// Output Merger State
-		std::array<winrt::com_ptr<ID3D11RenderTargetView>, D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT> m_renderTargetViews;
-		winrt::com_ptr<ID3D11DepthStencilView> m_depthStencilView;
-		winrt::com_ptr<ID3D11DepthStencilState> m_depthStencilState;
-		UINT m_stencilRef;
-		winrt::com_ptr<ID3D11BlendState> m_blendState;
-		std::array<FLOAT, 4> m_blendFactor;
-		UINT m_sampleMask;
-
-		BOOL m_hwProtectionEnabled;
-	public:
-		explicit D3D11ContextStateGuard(ID3D11DeviceContext* context)
-			: m_primitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_UNDEFINED)
-			, m_indexFormat(DXGI_FORMAT_UNKNOWN)
-			, m_indexOffset(0)
-			, m_numViewports(0)
-			, m_numScissorRects(0)
-			, m_stencilRef(0)
-			, m_sampleMask(0)
-			, m_hwProtectionEnabled(FALSE)
-		{
-			THROW_IF_FAILED(context->QueryInterface(m_context.put()));
-			SaveState();
-		}
-
-		~D3D11ContextStateGuard()
-		{
-			RestoreState();
-		}
-
-		D3D11ContextStateGuard(const D3D11ContextStateGuard&) = delete;
-		D3D11ContextStateGuard& operator=(const D3D11ContextStateGuard&) = delete;
-
-	private:
-		void SaveState()
-		{
-			if (!m_context) return;
-
-			// Save Vertex Shader State
-			ID3D11VertexShader* vs = nullptr;
-			m_context->VSGetShader(&vs, nullptr, nullptr);
-			m_vs.attach(vs);
-
-			ID3D11Buffer* vsBuffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-			m_context->VSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, vsBuffers);
-			for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++i)
-			{
-				m_vsConstantBuffers[i].attach(vsBuffers[i]);
-			}
-
-			ID3D11ShaderResourceView* vsSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-			m_context->VSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, vsSRVs);
-			for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; ++i)
-			{
-				m_vsSRVs[i].attach(vsSRVs[i]);
-			}
-
-			ID3D11SamplerState* vsSamplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
-			m_context->VSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, vsSamplers);
-			for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; ++i)
-			{
-				m_vsSamplers[i].attach(vsSamplers[i]);
-			}
-
-			// Save Pixel Shader State
-			ID3D11PixelShader* ps = nullptr;
-			m_context->PSGetShader(&ps, nullptr, nullptr);
-			m_ps.attach(ps);
-
-			ID3D11Buffer* psBuffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-			m_context->PSGetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, psBuffers);
-			for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++i)
-			{
-				m_psConstantBuffers[i].attach(psBuffers[i]);
-			}
-
-			ID3D11ShaderResourceView* psSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-			m_context->PSGetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, psSRVs);
-			for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; ++i)
-			{
-				m_psSRVs[i].attach(psSRVs[i]);
-			}
-
-			ID3D11SamplerState* psSamplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
-			m_context->PSGetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, psSamplers);
-			for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; ++i)
-			{
-				m_psSamplers[i].attach(psSamplers[i]);
-			}
-
-			// Save Input Assembler State
-			ID3D11InputLayout* inputLayout = nullptr;
-			m_context->IAGetInputLayout(&inputLayout);
-			m_inputLayout.attach(inputLayout);
-
-			m_context->IAGetPrimitiveTopology(&m_primitiveTopology);
-
-			ID3D11Buffer* vertexBuffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
-			m_context->IAGetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
-				vertexBuffers, m_vertexStrides.data(), m_vertexOffsets.data());
-			for (UINT i = 0; i < D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT; ++i)
-			{
-				m_vertexBuffers[i].attach(vertexBuffers[i]);
-			}
-
-			ID3D11Buffer* indexBuffer = nullptr;
-			m_context->IAGetIndexBuffer(&indexBuffer, &m_indexFormat, &m_indexOffset);
-			m_indexBuffer.attach(indexBuffer);
-
-			// Save Rasterizer State
-			ID3D11RasterizerState* rasterizerState = nullptr;
-			m_context->RSGetState(&rasterizerState);
-			m_rasterizerState.attach(rasterizerState);
-
-			m_numViewports = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-			m_context->RSGetViewports(&m_numViewports, m_viewports.data());
-
-			m_numScissorRects = D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-			m_context->RSGetScissorRects(&m_numScissorRects, m_scissorRects.data());
-
-			// Save Output Merger State
-			ID3D11RenderTargetView* renderTargetViews[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-			ID3D11DepthStencilView* depthStencilView = nullptr;
-			m_context->OMGetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT, renderTargetViews, &depthStencilView);
-
-			for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
-			{
-				m_renderTargetViews[i].attach(renderTargetViews[i]);
-			}
-			m_depthStencilView.attach(depthStencilView);
-
-			ID3D11DepthStencilState* depthStencilState = nullptr;
-			m_context->OMGetDepthStencilState(&depthStencilState, &m_stencilRef);
-			m_depthStencilState.attach(depthStencilState);
-
-			ID3D11BlendState* blendState = nullptr;
-			m_context->OMGetBlendState(&blendState, m_blendFactor.data(), &m_sampleMask);
-			m_blendState.attach(blendState);
-
-			m_context->GetHardwareProtectionState(&m_hwProtectionEnabled);
-		}
-
-		void RestoreState()
-		{
-			if (!m_context) return;
-
-			// Restore Vertex Shader State
-			m_context->VSSetShader(m_vs.get(), nullptr, 0);
-
-			ID3D11Buffer* vsBuffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-			for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++i)
-			{
-				vsBuffers[i] = m_vsConstantBuffers[i].get();
-			}
-			m_context->VSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, vsBuffers);
-
-			ID3D11ShaderResourceView* vsSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-			for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; ++i)
-			{
-				vsSRVs[i] = m_vsSRVs[i].get();
-			}
-			m_context->VSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, vsSRVs);
-
-			ID3D11SamplerState* vsSamplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
-			for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; ++i)
-			{
-				vsSamplers[i] = m_vsSamplers[i].get();
-			}
-			m_context->VSSetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, vsSamplers);
-
-			// Restore Pixel Shader State
-			m_context->PSSetShader(m_ps.get(), nullptr, 0);
-
-			ID3D11Buffer* psBuffers[D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT] = {};
-			for (UINT i = 0; i < D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT; ++i)
-			{
-				psBuffers[i] = m_psConstantBuffers[i].get();
-			}
-			m_context->PSSetConstantBuffers(0, D3D11_COMMONSHADER_CONSTANT_BUFFER_API_SLOT_COUNT, psBuffers);
-
-			ID3D11ShaderResourceView* psSRVs[D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT] = {};
-			for (UINT i = 0; i < D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT; ++i)
-			{
-				psSRVs[i] = m_psSRVs[i].get();
-			}
-			m_context->PSSetShaderResources(0, D3D11_COMMONSHADER_INPUT_RESOURCE_SLOT_COUNT, psSRVs);
-
-			ID3D11SamplerState* psSamplers[D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT] = {};
-			for (UINT i = 0; i < D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT; ++i)
-			{
-				psSamplers[i] = m_psSamplers[i].get();
-			}
-			m_context->PSSetSamplers(0, D3D11_COMMONSHADER_SAMPLER_SLOT_COUNT, psSamplers);
-
-			// Restore Input Assembler State
-			m_context->IASetInputLayout(m_inputLayout.get());
-			m_context->IASetPrimitiveTopology(m_primitiveTopology);
-
-			ID3D11Buffer* vertexBuffers[D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
-			for (UINT i = 0; i < D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT; ++i)
-			{
-				vertexBuffers[i] = m_vertexBuffers[i].get();
-			}
-			m_context->IASetVertexBuffers(0, D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT,
-				vertexBuffers, m_vertexStrides.data(), m_vertexOffsets.data());
-
-			m_context->IASetIndexBuffer(m_indexBuffer.get(), m_indexFormat, m_indexOffset);
-
-			// Restore Rasterizer State
-			m_context->RSSetState(m_rasterizerState.get());
-			m_context->RSSetViewports(m_numViewports, m_viewports.data());
-			m_context->RSSetScissorRects(m_numScissorRects, m_scissorRects.data());
-
-			// Restore Output Merger State
-			ID3D11RenderTargetView* renderTargetViews[D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT] = {};
-			for (UINT i = 0; i < D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT; ++i)
-			{
-				renderTargetViews[i] = m_renderTargetViews[i].get();
-			}
-			m_context->OMSetRenderTargets(D3D11_SIMULTANEOUS_RENDER_TARGET_COUNT,
-				renderTargetViews, m_depthStencilView.get());
-
-			m_context->OMSetDepthStencilState(m_depthStencilState.get(), m_stencilRef);
-			m_context->OMSetBlendState(m_blendState.get(), m_blendFactor.data(), m_sampleMask);
-
-			m_context->SetHardwareProtectionState(m_hwProtectionEnabled);
-		}
-	};
-
 	// Object pool with key-based reuse and TTL eviction.
 	// Released objects are kept for reuse instead of being freed immediately,
 	// avoiding repeated allocation of expensive resources (e.g. D3D11 textures).
@@ -1003,253 +734,4 @@ namespace OpenGlass
 		}
 	}
 
-	namespace RectF
-	{
-		FORCEINLINE [[nodiscard]] D2D1_RECT_F Align(const D2D1_RECT_F& rectangle)
-		{
-			return
-			{
-				std::floor(rectangle.left + 0.5f),
-				std::floor(rectangle.top + 0.5f),
-				std::floor(rectangle.right + 0.5f),
-				std::floor(rectangle.bottom + 0.5f)
-			};
-		}
-		FORCEINLINE [[nodiscard]] float PixelAlign(float value, bool upperBound)
-		{
-			// DWM snaps coordinates already within 1/256 pixel of an integer before
-			// applying the outward floor/ceil used for the remaining coordinates.
-			constexpr float pixelSnapTolerance = 1.f / 256.f;
-			const auto nearestInteger = std::round(value);
-			if (std::fabs(value - nearestInteger) <= pixelSnapTolerance)
-			{
-				return nearestInteger;
-			}
-			return upperBound ? std::ceil(value) : std::floor(value);
-		}
-		FORCEINLINE [[nodiscard]] D2D1_RECT_F PixelAlign(const D2D1_RECT_F& rectangle)
-		{
-			return
-			{
-				PixelAlign(rectangle.left, false),
-				PixelAlign(rectangle.top, false),
-				PixelAlign(rectangle.right, true),
-				PixelAlign(rectangle.bottom, true)
-			};
-		}
-		FORCEINLINE [[nodiscard]] D2D1_RECT_F FromRectU(const D2D1_RECT_U& rectangle)
-		{
-			return
-			{
-				static_cast<float>(rectangle.left),
-				static_cast<float>(rectangle.top),
-				static_cast<float>(rectangle.right),
-				static_cast<float>(rectangle.bottom)
-			};
-		}
-		FORCEINLINE [[nodiscard]] D2D1_RECT_F FromRectL(const D2D1_RECT_L& rectangle)
-		{
-			return
-			{
-				static_cast<float>(rectangle.left),
-				static_cast<float>(rectangle.top),
-				static_cast<float>(rectangle.right),
-				static_cast<float>(rectangle.bottom)
-			};
-		}
-		FORCEINLINE [[nodiscard]] D2D1_RECT_U ToRectU(const D2D1_RECT_F& rectangle)
-		{
-			return
-			{
-				static_cast<UINT32>(std::floor(rectangle.left)),
-				static_cast<UINT32>(std::floor(rectangle.top)),
-				static_cast<UINT32>(std::ceil(rectangle.right)),
-				static_cast<UINT32>(std::ceil(rectangle.bottom))
-			};
-		}
-		FORCEINLINE [[nodiscard]] D2D1_RECT_L ToRectL(const D2D1_RECT_F& rectangle)
-		{
-			return
-			{
-				static_cast<LONG>(std::floor(rectangle.left)),
-				static_cast<LONG>(std::floor(rectangle.top)),
-				static_cast<LONG>(std::ceil(rectangle.right)),
-				static_cast<LONG>(std::ceil(rectangle.bottom))
-			};
-		}
-		FORCEINLINE [[nodiscard]] D2D1_RECT_F TransformRect(const D2D1_RECT_F& rectangle, const D2D1_MATRIX_3X2_F& matrix)
-		{
-			const auto matrixHelper = D2D1::Matrix3x2F::ReinterpretBaseType(&matrix);
-			const auto topLeft = matrixHelper->TransformPoint(D2D1::Point2F(rectangle.left, rectangle.top));
-			const auto topRight = matrixHelper->TransformPoint(D2D1::Point2F(rectangle.right, rectangle.top));
-			const auto bottomLeft = matrixHelper->TransformPoint(D2D1::Point2F(rectangle.left, rectangle.bottom));
-			const auto bottomRight = matrixHelper->TransformPoint(D2D1::Point2F(rectangle.right, rectangle.bottom));
-
-			D2D1_RECT_F transformedRect{};
-			transformedRect.left = std::min({ topLeft.x, topRight.x, bottomLeft.x, bottomRight.x });
-			transformedRect.top = std::min({ topLeft.y, topRight.y, bottomLeft.y, bottomRight.y });
-			transformedRect.right = std::max({ topLeft.x, topRight.x, bottomLeft.x, bottomRight.x });
-			transformedRect.bottom = std::max({ topLeft.y, topRight.y, bottomLeft.y, bottomRight.y });
-
-			return transformedRect;
-		}
-		FORCEINLINE [[nodiscard]] D2D1_RECT_F Transform2DBounds(
-			const D2D1_RECT_F& rectangle,
-			const D2D1_MATRIX_4X4_F& matrix
-		)
-		{
-			// Mirrors CMILMatrix::Transform2DBoundsHelper<0> for a z=0 rectangle.
-			constexpr float matrixEpsilon = 0.000081380211f;
-			const auto isNear = [matrixEpsilon](float value, float expected)
-			{
-				return std::fabs(value - expected) < matrixEpsilon;
-			};
-
-			if (
-				isNear(matrix._11, 1.f) &&
-				isNear(matrix._12, 0.f) &&
-				isNear(matrix._14, 0.f) &&
-				isNear(matrix._21, 0.f) &&
-				isNear(matrix._22, 1.f) &&
-				isNear(matrix._24, 0.f) &&
-				isNear(matrix._44, 1.f)
-			)
-			{
-				return
-				{
-					rectangle.left + matrix._41,
-					rectangle.top + matrix._42,
-					rectangle.right + matrix._41,
-					rectangle.bottom + matrix._42
-				};
-			}
-
-			if (
-				isNear(matrix._12, 0.f) &&
-				isNear(matrix._14, 0.f) &&
-				isNear(matrix._21, 0.f) &&
-				isNear(matrix._24, 0.f) &&
-				isNear(matrix._44, 1.f)
-			)
-			{
-				const auto left = rectangle.left * matrix._11 + matrix._41;
-				const auto top = rectangle.top * matrix._22 + matrix._42;
-				const auto right = rectangle.right * matrix._11 + matrix._41;
-				const auto bottom = rectangle.bottom * matrix._22 + matrix._42;
-				return
-				{
-					std::min(left, right),
-					std::min(top, bottom),
-					std::max(left, right),
-					std::max(top, bottom)
-				};
-			}
-
-			struct HomogeneousPoint
-			{
-				float x;
-				float y;
-				float w;
-			};
-			const auto transformPoint = [&](float x, float y)
-			{
-				return HomogeneousPoint
-				{
-					y * matrix._21 + x * matrix._11 + matrix._41,
-					y * matrix._22 + x * matrix._12 + matrix._42,
-					y * matrix._24 + x * matrix._14 + matrix._44
-				};
-			};
-			std::array points
-			{
-				transformPoint(rectangle.left, rectangle.top),
-				transformPoint(rectangle.left, rectangle.bottom),
-				transformPoint(rectangle.right, rectangle.bottom),
-				transformPoint(rectangle.right, rectangle.top)
-			};
-
-			if (std::ranges::any_of(points, [&](const auto& point) { return point.w < matrixEpsilon; }))
-			{
-				if (std::ranges::any_of(points, [&](const auto& point) { return point.w >= -matrixEpsilon; }))
-				{
-					return D2D1::InfiniteRect();
-				}
-				return {};
-			}
-
-			for (auto& point : points)
-			{
-				if (!isNear(point.w, 1.f))
-				{
-					point.x /= point.w;
-					point.y /= point.w;
-				}
-			}
-
-			D2D1_RECT_F transformedRect
-			{
-				points[0].x,
-				points[0].y,
-				points[0].x,
-				points[0].y
-			};
-			for (const auto& point : std::span{ points }.subspan(1))
-			{
-				transformedRect.left = std::min(transformedRect.left, point.x);
-				transformedRect.top = std::min(transformedRect.top, point.y);
-				transformedRect.right = std::max(transformedRect.right, point.x);
-				transformedRect.bottom = std::max(transformedRect.bottom, point.y);
-			}
-			return transformedRect;
-		}
-		FORCEINLINE [[nodiscard]] D2D1_RECT_F ResolveDeviceBounds(
-			const D2D1_RECT_F& rectangle,
-			const D2D1_MATRIX_4X4_F& deviceTransform,
-			bool rectangleIsDeviceSpace
-		)
-		{
-			if (rectangleIsDeviceSpace)
-			{
-				return rectangle;
-			}
-			return PixelAlign(Transform2DBounds(rectangle, deviceTransform));
-		}
-		FORCEINLINE constexpr bool DoesIntersectUnsafe(
-			const D2D1_RECT_F& rc1,
-			const D2D1_RECT_F& rc2
-		)
-		{
-			if (
-				!wil::rect_is_empty(rc1) &&
-				!wil::rect_is_empty(rc2) &&
-
-				rc1.right > rc2.left &&
-				rc2.right > rc1.left &&
-				rc1.bottom > rc2.top &&
-				rc2.bottom > rc1.top
-			)
-			{
-				return true;
-			}
-			return false;
-		}
-		inline constexpr bool IntersectUnsafe(
-			D2D1_RECT_F& dst,
-			const D2D1_RECT_F& src
-		)
-		{
-			dst.left = std::max(dst.left, src.left);
-			dst.top = std::max(dst.top, src.top);
-			dst.right = std::min(dst.right, src.right);
-			dst.bottom = std::min(dst.bottom, src.bottom);
-
-			if (!wil::rect_is_empty(dst))
-			{
-				return true;
-			}
-
-			dst.left = dst.top = dst.right = dst.bottom = 0.f;
-			return false;
-		}
-	}
 }

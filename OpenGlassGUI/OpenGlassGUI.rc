@@ -19,6 +19,10 @@
 LANGUAGE LANG_NEUTRAL, SUBLANG_DEFAULT
 #pragma code_page(65001)
 
+IDI_OPENGLASS ICON "Assets\\OpenGlass.ico"
+IDR_ICON_NOTICES RCDATA "Assets\\OpenGlass.NOTICE.txt"
+IDR_AEROSHOTCRE_LICENSE RCDATA "Assets\\AeroShotCRE.LICENSE.txt"
+
 #ifdef APSTUDIO_INVOKED
 /////////////////////////////////////////////////////////////////////////////
 //

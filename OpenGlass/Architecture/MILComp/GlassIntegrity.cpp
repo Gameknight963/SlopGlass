@@ -1,11 +1,12 @@
 #include "pch.h"
 #include "HookHelper.hpp"
-#include "uDWMProjection.hpp"
+#include "uDwmProjection.hpp"
 #include "dwmcoreProjection.hpp"
 #include "Shared.hpp"
 #include "GlassKernel.hpp"
 #include "GlassIntegrity.hpp"
 #include "GlassSafetyZoneLayer.hpp"
+#include "GlassRenderTarget.hpp"
 #include "GlassCoverageSet.hpp"
 #include "GlassRenderer.hpp"
 
@@ -13,6 +14,13 @@ using namespace OpenGlass;
 
 namespace OpenGlass::GlassIntegrity
 {
+	CGlassRenderTarget* g_renderTarget{};
+
+	CGlassRenderTarget& GetRenderTarget()
+	{
+		return *g_renderTarget;
+	}
+
 	HRESULT MyCOcclusionContext_CheckAndRecordOverlayCandidate(
 		dwmcore::COcclusionContext* This,
 		dwmcore::CVisual* visual,
@@ -87,7 +95,7 @@ namespace OpenGlass::GlassIntegrity
 	HRESULT MyCDrawingContext_DrawVisualTree(
 		dwmcore::CDrawingContext* This,
 		dwmcore::CVisualTree* tree,
-		const D2D1_RECT_F& rectangle,
+		const DWM::MilRect3D& bounds,
 		const dwmcore::COcclusionContext* occlusionContext,
 		int clearMode,
 		float padding,
@@ -770,14 +778,23 @@ D2D1_RECT_F* GlassIntegrity::MyCTreeDirty_GetOptimizedRect(
 HRESULT GlassIntegrity::MyCDrawingContext_DrawVisualTree(
 	dwmcore::CDrawingContext* This,
 	dwmcore::CVisualTree* tree,
-	const D2D1_RECT_F& rectangle,
+	const DWM::MilRect3D& bounds,
 	const dwmcore::COcclusionContext* occlusionContext,
 	int clearMode,
 	float padding,
 	dwmcore::CVisual* visualOverride
 )
 {
+	// Keep each nested tree's target views alive only until that draw returns.
+	CGlassRenderTarget target;
+	const auto previousTarget = std::exchange(g_renderTarget, &target);
+	const auto restoreTarget = wil::scope_exit([previousTarget]
+	{
+		g_renderTarget = previousTarget;
+	});
+
 	HRESULT hr{ S_OK };
+	const auto& rectangle = bounds.rectangle;
 
 	const auto safetyZonePoolCleanup = wil::scope_exit([]
 	{
@@ -844,7 +861,9 @@ HRESULT GlassIntegrity::MyCDrawingContext_DrawVisualTree(
 			g_safetyZonePool.Release(d2dContext, std::move(safetyZoneLayer));
 		});
 
-		D2D1_RECT_F extendedRectangle{};
+		// DrawVisualTree consumes all six coordinates, including during CVI capture.
+		// Expand only XY while preserving the caller's front/back depth interval.
+		auto extendedBounds = bounds;
 		if (
 			hr = safetyZoneLayer->Push(
 				context,
@@ -852,7 +871,7 @@ HRESULT GlassIntegrity::MyCDrawingContext_DrawVisualTree(
 				false,
 				rectangle,
 				expansion,
-				extendedRectangle
+				extendedBounds.rectangle
 			);
 			FAILED(hr)
 		)
@@ -861,7 +880,7 @@ HRESULT GlassIntegrity::MyCDrawingContext_DrawVisualTree(
 			break;
 		}
 
-		hr = g_CDrawingContext_DrawVisualTree_Org(This, tree, extendedRectangle, occlusionContext, clearMode, padding, visualOverride);
+		hr = g_CDrawingContext_DrawVisualTree_Org(This, tree, extendedBounds, occlusionContext, clearMode, padding, visualOverride);
 
 		LOG_IF_FAILED(This->ApplyRenderStateInternal(false)); // apply clip and other states
 		LOG_IF_FAILED(This->FlushD2D()); // flush previous draw calls
@@ -881,7 +900,7 @@ HRESULT GlassIntegrity::MyCDrawingContext_DrawVisualTree(
 	}
 	while (false);
 
-	hr = g_CDrawingContext_DrawVisualTree_Org(This, tree, rectangle, occlusionContext, clearMode, padding, visualOverride);
+	hr = g_CDrawingContext_DrawVisualTree_Org(This, tree, bounds, occlusionContext, clearMode, padding, visualOverride);
 
 	return hr;
 }
@@ -1079,8 +1098,7 @@ void GlassIntegrity::Startup()
 			{ &g_COcclusionContext_IsOccluded_Org },
 			{ &g_CTreeDirty_GetOptimizedRect_Org },
 			{ &g_CDrawingContext_DrawVisualTree_Org },
-		},
-		true
+		}
 	);
 }
 
@@ -1112,8 +1130,7 @@ void GlassIntegrity::Shutdown()
 			{ &g_COcclusionContext_IsOccluded_Org },
 			{ &g_CTreeDirty_GetOptimizedRect_Org },
 			{ &g_CDrawingContext_DrawVisualTree_Org },
-		},
-		false
+		}
 	);
 
 	if (g_CColorBrush_AddOcclusionInformation_Org)

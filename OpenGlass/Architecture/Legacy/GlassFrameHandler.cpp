@@ -2,7 +2,8 @@
 #include "Shared.hpp"
 #include "GlassFrameHandler.hpp"
 #include "GlassKernel.hpp"
-#include "uDWMProjection.hpp"
+#include "GlassInfra.hpp"
+#include "uDwmProjection.hpp"
 #include "dwmcoreProjection.hpp"
 #include "GlassEffectBrush.hpp"
 #include "GlassReflectionBrush.hpp"
@@ -32,8 +33,9 @@ namespace OpenGlass::GlassFrameHandler
 
 HRESULT GlassFrameHandler::UpdateReflectionViewport(uDWM::CTopLevelWindow* window)
 {
-	const auto active = window->TreatAsActiveWindow();
-	const auto maximized = window->TreatAsMaximized();
+	const auto status = GlassKernel::GetWindowStatus(window);
+	const auto active = status.test(0);
+	const auto maximized = status.test(1);
 	const auto desktop = window->GetTransformParent();
 	const auto opacity = GlassKernel::GetAdjustedReflectionIntensity(active, maximized);
 	if (
@@ -161,8 +163,10 @@ void GlassFrameHandler::MyCGlassColorizationParameters_AdjustWindowColorization(
 	UINT flag
 )
 {
-	const auto active = (flag & 1) != 0;
-	const auto maximized = GlassKernel::g_window ? GlassKernel::g_window->TreatAsMaximized() : false;
+	const auto status = GlassInfra::g_window ?
+		GlassKernel::GetWindowStatus(GlassInfra::g_window, (flag & 1) != 0) : std::bitset<2>{ flag & 1u };
+	const auto active = status.test(0);
+	const auto maximized = status.test(1);
 
 	This->color = Color::ToArgb(
 		Color::scRGBTosRGB(
@@ -187,8 +191,9 @@ void GlassFrameHandler::MyCGlassColorizationParameters_AdjustWindowColorization(
 
 HRESULT GlassFrameHandler::MyCTopLevelWindow_UpdateNCAreaBackground(uDWM::CTopLevelWindow* This)
 {
-	const auto active = This->TreatAsActiveWindow();
-	const auto maximized = This->TreatAsMaximized();
+	const auto status = GlassKernel::GetWindowStatus(This);
+	const auto active = status.test(0);
+	const auto maximized = status.test(1);
 
 	const auto hr = g_CTopLevelWindow_UpdateNCAreaBackground_Org(This);
 
@@ -209,17 +214,6 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_UpdateNCAreaBackground(uDWM::CTopLe
 		if (!effectBrush)
 		{
 			effectBrush = GlassEffectBrush::GetOrCreate(This, true);
-
-			if (Shared::g_overrideAccent)
-			{
-				if (
-					const auto accentVisual = This->GetAccent();
-					accentVisual
-				)
-				{
-					accentVisual->SetDirtyFlags(0x1000);
-				}
-			}
 		}
 
 		winrt::com_ptr<uDWM::CRgnGeometryProxy> captionGeometry{ nullptr };
@@ -230,7 +224,7 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_UpdateNCAreaBackground(uDWM::CTopLe
 			captionGeometry.copy_from(reinterpret_cast<uDWM::CRgnGeometryProxy*>(instruction->GetGeometry()));
 			RETURN_IF_FAILED(
 				uDWM::ResourceHelper::CreateGeometryFromHRGN(
-					GlassKernel::g_combinedRgn.get(),
+					GlassInfra::g_combinedRgn.get(),
 					reinterpret_cast<uDWM::CRgnGeometryProxy**>(&captionGeometry)
 				)
 			);
@@ -293,10 +287,11 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_UpdateNCAreaBackground(uDWM::CTopLe
 	if (effectBrush)
 	{
 		auto color = This->GetCaptionColorizationParameters()->getArgbcolor();
-		color.a = GlassKernel::AlphaChannelReinterpreter(active, maximized).ToFloat();
+		color.a = GlassInfra::AlphaChannelReinterpreter(active, maximized).ToFloat();
 		RETURN_IF_FAILED(effectBrush->Update(1.0, color));
 	}
-	else if (Shared::g_overrideAccent)
+	// Accent owns a separate brush; it must refresh even when the shared NC brush exists.
+	if (Shared::g_overrideAccent)
 	{
 		if (
 			const auto accentVisual = This->GetAccent();
@@ -314,8 +309,9 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_UpdateClientBlur(uDWM::CTopLevelWin
 {
 	const auto hr = g_CTopLevelWindow_UpdateClientBlur_Org(This);
 
-	const auto active = This->TreatAsActiveWindow();
-	const auto maximized = This->TreatAsMaximized();
+	const auto status = GlassKernel::GetWindowStatus(This);
+	const auto active = status.test(0);
+	const auto maximized = status.test(1);
 
 	auto effectBrush = GlassEffectBrush::GetOrCreate(This);
 
@@ -333,17 +329,6 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_UpdateClientBlur(uDWM::CTopLevelWin
 		if (!effectBrush)
 		{
 			effectBrush = GlassEffectBrush::GetOrCreate(This, true);
-
-			if (Shared::g_overrideAccent)
-			{
-				if (
-					const auto accentVisual = This->GetAccent();
-					accentVisual
-				)
-				{
-					accentVisual->SetDirtyFlags(0x1000);
-				}
-			}
 		}
 
 		winrt::com_ptr<uDWM::CRgnGeometryProxy> clientBlurGeometry{ nullptr };
@@ -411,10 +396,10 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_UpdateClientBlur(uDWM::CTopLevelWin
 	if (effectBrush)
 	{
 		auto color = This->GetCaptionColorizationParameters()->getArgbcolor();
-		color.a = GlassKernel::AlphaChannelReinterpreter(active, maximized).ToFloat();
+		color.a = GlassInfra::AlphaChannelReinterpreter(active, maximized).ToFloat();
 		RETURN_IF_FAILED(effectBrush->Update(1.0, color));
 	}
-	else if (Shared::g_overrideAccent)
+	if (Shared::g_overrideAccent)
 	{
 		if (
 			const auto accentVisual = This->GetAccent();
@@ -436,10 +421,10 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_ValidateVisual(uDWM::CTopLevelWindo
 		return g_CTopLevelWindow_ValidateVisual_Org(This);
 	}
 
-	GlassKernel::g_window = This;
+	GlassInfra::g_window = This;
 	const auto updateReflectionBeforeLeave = wil::scope_exit([This]
 	{
-		GlassKernel::g_window = nullptr;
+		GlassInfra::g_window = nullptr;
 		LOG_IF_FAILED(UpdateReflectionViewport(This));
 	});
 	
@@ -473,8 +458,7 @@ void GlassFrameHandler::Startup()
 
 			{ &g_CTopLevelWindow_Destructor_Org },
 			{ &g_CTopLevelWindow_ValidateVisual_Org }
-		},
-		true
+		}
 	);
 }
 
@@ -494,8 +478,7 @@ void GlassFrameHandler::Shutdown()
 
 			{ &g_CTopLevelWindow_Destructor_Org },
 			{ &g_CTopLevelWindow_ValidateVisual_Org }
-		},
-		false
+		}
 	);
 
 }
