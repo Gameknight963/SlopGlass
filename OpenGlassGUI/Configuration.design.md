@@ -247,6 +247,8 @@ This is not a cross-process transaction or a guarantee against arbitrary late wr
 
 This design does not patch system DLLs, install COM hijacks or add Host RGB monitoring. The separately discussed uxtheme patcher is a different project, not a dependency of GUI color selection.
 
+Legacy frame highlights use a style choice (Windows 7, Vista, From theme, Disabled) and two theme-part IDs. Windows 7 is the local default; part IDs default to 95/96 and are editable in From theme mode. Choosing Windows 7 or returning a part ID to its default removes that selected layer's value. All three settings use the ordinary preview, Save/Revert, inheritance notices and preset paths. Theme refresh applies them immediately. They have no MILComp rendering effect.
+
 ## 7. Format, resources and simplicity
 
 Interrupted-operation records persist raw numeric setting IDs alongside setting names. Append new settings to `Settings::Id` and its catalog, and keep existing IDs stable so older recovery records remain readable.

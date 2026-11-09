@@ -7,7 +7,7 @@
 
 namespace OpenGlass::Settings
 {
-	inline constexpr unsigned CatalogVersion = 3;
+	inline constexpr unsigned CatalogVersion = 4;
 
 	enum class Scope : std::uint8_t
 	{
@@ -89,6 +89,9 @@ namespace OpenGlass::Settings
 		EnableTransparency,
 		// Append settings: interrupted-operation records persist these numeric IDs.
 		EnableUxMitigation,
+		HighlightStyle,
+		LeftHighlightCornerId,
+		SideHighlightId,
 		Count
 	};
 
@@ -161,7 +164,10 @@ namespace OpenGlass::Settings
 		{ Id::ToolCloseButtonGlowId, L"TOOLCLOSEBUTTONGLOWid", ValueType::Dword, AssetRole::None, UpdateType::RestartRequired, 1, false },
 		// Raw Windows recovery identity; presets keep the ColorizationOpaqueBlend field.
 		{ Id::EnableTransparency, L"EnableTransparency", ValueType::Dword, AssetRole::None, UpdateType::Backdrop, 1, false },
-		{ Id::EnableUxMitigation, L"EnableUxMitigation", ValueType::Dword, AssetRole::None, UpdateType::Backdrop, 3 }
+		{ Id::EnableUxMitigation, L"EnableUxMitigation", ValueType::Dword, AssetRole::None, UpdateType::Backdrop, 3 },
+		{ Id::HighlightStyle, L"HighlightStyle", ValueType::Dword, AssetRole::None, UpdateType::Theme, 4 },
+		{ Id::LeftHighlightCornerId, L"LEFTHIGHLIGHTCORNERid", ValueType::Dword, AssetRole::None, UpdateType::Theme, 4 },
+		{ Id::SideHighlightId, L"SIDEHIGHLIGHTid", ValueType::Dword, AssetRole::None, UpdateType::Theme, 4 }
 	}};
 
 	consteval bool IsValidCatalog()

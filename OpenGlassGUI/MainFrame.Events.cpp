@@ -442,6 +442,41 @@ namespace OpenGlass
 				updateDword(Settings::Id::CaptionButtons, sel);
 			}
 		});
+		m_chHighlightStyle->Bind(wxEVT_CHOICE, [this, updateDword, deleteValue](wxCommandEvent& e) {
+			const int style = e.GetSelection();
+			if (style == 0)
+			{
+				deleteValue(Settings::Id::HighlightStyle);
+			}
+			else
+			{
+				updateDword(Settings::Id::HighlightStyle, style);
+			}
+			m_scHighlightCornerId->Enable(style == 2);
+			m_scHighlightSideId->Enable(style == 2);
+		});
+		m_scHighlightCornerId->Bind(wxEVT_SPINCTRL, [this, updateDword, deleteValue](wxSpinEvent&) {
+			const auto part = m_scHighlightCornerId->GetValue();
+			if (part == 95)
+			{
+				deleteValue(Settings::Id::LeftHighlightCornerId);
+			}
+			else
+			{
+				updateDword(Settings::Id::LeftHighlightCornerId, part);
+			}
+		});
+		m_scHighlightSideId->Bind(wxEVT_SPINCTRL, [this, updateDword, deleteValue](wxSpinEvent&) {
+			const auto part = m_scHighlightSideId->GetValue();
+			if (part == 96)
+			{
+				deleteValue(Settings::Id::SideHighlightId);
+			}
+			else
+			{
+				updateDword(Settings::Id::SideHighlightId, part);
+			}
+		});
 		m_chCenterCaption->Bind(wxEVT_CHOICE, [this, updateDword, deleteValue]([[maybe_unused]] wxCommandEvent& e) {
 			int sel = e.GetSelection();
 			if (sel == 0)

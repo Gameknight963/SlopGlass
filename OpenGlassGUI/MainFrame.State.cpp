@@ -182,6 +182,11 @@ namespace OpenGlass
 		m_scTextGlowSize->Enable(glowMode == 3);
 
 		m_chCaptionButtons->SetSelection(std::clamp<int>(m_config->GetDword(L"CaptionButtons", 0), 0, 3));
+		m_chHighlightStyle->SetSelection(std::clamp<int>(m_config->GetDword(L"HighlightStyle", 0), 0, 3));
+		m_scHighlightCornerId->SetValue(std::clamp<DWORD>(m_config->GetDword(L"LEFTHIGHLIGHTCORNERid", 95), 1, 65535));
+		m_scHighlightSideId->SetValue(std::clamp<DWORD>(m_config->GetDword(L"SIDEHIGHLIGHTid", 96), 1, 65535));
+		m_scHighlightCornerId->Enable(m_chHighlightStyle->GetSelection() == 2);
+		m_scHighlightSideId->Enable(m_chHighlightStyle->GetSelection() == 2);
 		m_chCenterCaption->SetSelection(std::clamp<int>(m_config->GetDword(L"CenterCaption", 0), 0, 2));
 		m_chkDisableModernBorders->SetValue(m_config->GetDword(L"DisableModernBorders", 0) != 0);
 

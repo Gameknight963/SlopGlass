@@ -616,6 +616,21 @@ namespace OpenGlass
 		m_chCaptionButtons = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, captionStyles);
 		AddProperty(panel, geometryGroup, L"Caption buttons style:", m_chCaptionButtons, Settings::Id::CaptionButtons);
 
+		wxArrayString highlightStyles;
+		highlightStyles.Add(L"Windows 7 (default)");
+		highlightStyles.Add(L"Windows Vista");
+		highlightStyles.Add(L"From theme");
+		highlightStyles.Add(L"Disabled");
+		m_chHighlightStyle = new wxChoice(panel, wxID_ANY, wxDefaultPosition, wxDefaultSize, highlightStyles);
+		m_chHighlightStyle->SetToolTip(L"Legacy frame corner and side highlights. Built-in styles need no custom theme. From theme uses the highlight parts in the active atlas and falls back to Windows 7 artwork when absent.");
+		AddProperty(panel, geometryGroup, L"Frame highlights:", m_chHighlightStyle, Settings::Id::HighlightStyle);
+		m_scHighlightCornerId = new wxSpinCtrl(panel, wxID_ANY);
+		m_scHighlightCornerId->SetRange(1, 65535);
+		AddProperty(panel, geometryGroup, L"Theme corner highlight part:", m_scHighlightCornerId, Settings::Id::LeftHighlightCornerId);
+		m_scHighlightSideId = new wxSpinCtrl(panel, wxID_ANY);
+		m_scHighlightSideId->SetRange(1, 65535);
+		AddProperty(panel, geometryGroup, L"Theme side highlight part:", m_scHighlightSideId, Settings::Id::SideHighlightId);
+
 		// Disable Modern Borders
 		{
 			wxBoxSizer* row = new wxBoxSizer(wxHORIZONTAL);

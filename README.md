@@ -27,6 +27,8 @@ OpenGlass supports only the listed x64 General Availability releases, with exper
 
 Starting in v3.1.0, the configuration window opens in the shared HKLM view, which sets ordinary defaults for the computer. Personal HKCU settings override ordinary settings for that account. See the [configuration guide](https://github.com/ALTaleX531/OpenGlass/wiki/Configuration-and-registry-reference) to choose or switch views, and see the [preset library guide](https://github.com/ALTaleX531/OpenGlass/wiki/Preset-packages) for saved looks and recovery behavior.
 
+Legacy frame highlights are available under the GUI's frame geometry settings. Windows 7 and Vista styles use bundled artwork; From theme reads configurable corner/side parts and falls back to Windows 7 artwork when missing. Disabled turns them off. The corresponding DWORDs are `HighlightStyle` (0: Windows 7, 1: Vista, 2: From theme, 3: Disabled), `LEFTHIGHLIGHTCORNERid` (default 95), and `SIDEHIGHLIGHTid` (default 96). See the [highlight rendering contract](OpenGlass/Runtime.design.md#legacy-frame-highlights) for scope and limitations.
+
 > [!TIP]
 > **Emergency Exit:** Hold <kbd>Ctrl</kbd>+<kbd>Win</kbd>+<kbd>Shift</kbd>+<kbd>Q</kbd> to terminate DWM if the system becomes unresponsive.
 

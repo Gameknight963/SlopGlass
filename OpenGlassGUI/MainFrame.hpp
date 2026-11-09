@@ -219,6 +219,9 @@ namespace OpenGlass
 
 		wxChoice* m_chCaptionButtons{ nullptr };
 		wxChoice* m_chCenterCaption{ nullptr };
+		wxChoice* m_chHighlightStyle{ nullptr };
+		wxSpinCtrl* m_scHighlightCornerId{ nullptr };
+		wxSpinCtrl* m_scHighlightSideId{ nullptr };
 		wxCheckBox* m_chkDisableModernBorders{ nullptr };
 		wxButton* m_btnExportAtlas{ nullptr };
 

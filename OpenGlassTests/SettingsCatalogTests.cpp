@@ -25,8 +25,15 @@ namespace OpenGlassTests
 			}
 		}
 		Check(Settings::PresetPackSettingCount(1) == Settings::PresetPackSettingCount(2) + 5);
-		Check(Settings::PresetPackSettingCount(2) + 1 == Settings::PresetPackSettingCount());
+		Check(Settings::PresetPackSettingCount(2) + 1 == Settings::PresetPackSettingCount(3));
 		Check(!Settings::IsPresetPackSetting(Settings::Get(Settings::Id::EnableUxMitigation), 2));
+		Check(Settings::PresetPackSettingCount(3) + 3 == Settings::PresetPackSettingCount());
+		for (const auto id : { Settings::Id::HighlightStyle, Settings::Id::LeftHighlightCornerId, Settings::Id::SideHighlightId })
+		{
+			Check(!Settings::IsPresetPackSetting(Settings::Get(id), 3));
+			Check(Settings::IsPresetPackSetting(Settings::Get(id), 4));
+			Check(Settings::Get(id).impact == Settings::UpdateType::Theme);
+		}
 		Check(Settings::Get(Settings::Id::EnableUxMitigation).impact == Settings::UpdateType::Backdrop);
 		Check(Settings::Get(Settings::Id::GlassOverrideAccent).impact == Settings::UpdateType::Backdrop);
 		Check(Settings::Get(Settings::Id::GlassSafetyZoneMode).impact == Settings::UpdateType::Backdrop);
