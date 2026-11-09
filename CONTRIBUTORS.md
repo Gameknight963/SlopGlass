@@ -19,6 +19,7 @@ This file credits the people whose work is still part of the project. Git histor
 - [@MagicAndre1981](https://github.com/MagicAndre1981) added SourceLink support for PDB debugging. See [PR #157](https://github.com/ALTaleX531/OpenGlass/pull/157).
 - [@taiman724](https://github.com/taiman724) contributed a documentation fix in [PR #311](https://github.com/ALTaleX531/OpenGlass/pull/311).
 - [@Ingan121](https://github.com/Ingan121) proposed and prototyped multi-session RDP injection in [PR #127](https://github.com/ALTaleX531/OpenGlass/pull/127). The final implementation was rewritten rather than merged directly.
+- [@arceuss](https://github.com/arceuss) contributed the Legacy frame-highlight rendering approach, bundled highlight artwork integration, and Windows 7/Vista/theme style options adapted from [his OpenGlass fork](https://github.com/arceuss/OpenGlass/commit/d8a826e943dba8df498bfaa00b8cb239532bcf6c).
 
 ## Research and collaboration
 

@@ -7,6 +7,7 @@
 #include "dwmcoreProjection.hpp"
 #include "GlassEffectBrush.hpp"
 #include "GlassReflectionBrush.hpp"
+#include "FrameHighlights.hpp"
 #include "DetourChains.hpp"
 
 using namespace OpenGlass;
@@ -250,6 +251,7 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_UpdateNCAreaBackground(uDWM::CTopLe
 				)
 			);
 			RETURN_IF_FAILED(legacyVisual->AddInstruction(instruction.get()));
+			RETURN_IF_FAILED(FrameHighlights::Append(This, legacyVisual, captionGeometry.get()));
 		}
 
 		if (!This->IsOffscreen())
@@ -426,6 +428,7 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_ValidateVisual(uDWM::CTopLevelWindo
 	{
 		GlassInfra::g_window = nullptr;
 		LOG_IF_FAILED(UpdateReflectionViewport(This));
+		LOG_IF_FAILED(FrameHighlights::UpdateWindow(This));
 	});
 	
 	return g_CTopLevelWindow_ValidateVisual_Org(This);
@@ -433,13 +436,15 @@ HRESULT GlassFrameHandler::MyCTopLevelWindow_ValidateVisual(uDWM::CTopLevelWindo
 
 void GlassFrameHandler::MyCTopLevelWindow_Destructor(uDWM::CTopLevelWindow* This)
 {
+	FrameHighlights::Remove(This);
 	GlassReflectionBrush::Remove(This);
 	GlassEffectBrush::Remove(This);
 	return g_CTopLevelWindow_Destructor_Org(This);
 }
 
-void GlassFrameHandler::Update([[maybe_unused]] GlassEngine::UpdateType type)
+void GlassFrameHandler::Update(GlassEngine::UpdateType type)
 {
+	FrameHighlights::Update(type);
 }
 
 void GlassFrameHandler::Startup()
@@ -485,4 +490,5 @@ void GlassFrameHandler::Shutdown()
 
 void GlassFrameHandler::Cleanup()
 {
+	FrameHighlights::Cleanup();
 }

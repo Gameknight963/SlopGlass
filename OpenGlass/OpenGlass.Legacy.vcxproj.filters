@@ -66,6 +66,12 @@
     <ClCompile Include="Architecture\Legacy\GlassRenderer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Architecture\Legacy\FrameHighlights.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Architecture\Legacy\HighlightRealizer.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="Architecture\Legacy\ReflectionRealizer.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -93,6 +99,12 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Architecture\Legacy\GlassReflectionBrush.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Architecture\Legacy\FrameHighlights.hpp">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="Architecture\Legacy\HighlightRealizer.hpp">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="Architecture\Legacy\ReflectionRealizer.hpp">
@@ -551,6 +563,15 @@
     <FxCompile Include="Blur.VS.hlsl">
       <Filter>Source Files</Filter>
     </FxCompile>
+    <Image Include="highlight.png">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="highlight_vista.png">
+      <Filter>Resource Files</Filter>
+    </Image>
+    <Image Include="sidehighlight.png">
+      <Filter>Resource Files</Filter>
+    </Image>
     <Image Include="reflection.png">
       <Filter>Resource Files</Filter>
     </Image>

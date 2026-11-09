@@ -49,6 +49,11 @@
   </ItemDefinitionGroup>
   <Import Project="OpenGlass.Shared.vcxitems" Label="Shared" />
   <ItemGroup>
+    <Image Include="highlight.png" />
+    <Image Include="highlight_vista.png" />
+    <Image Include="sidehighlight.png" />
+  </ItemGroup>
+  <ItemGroup>
     <ClInclude Include="Architecture\Legacy\dcompPrivates.hpp" />
     <ClInclude Include="Architecture\Legacy\AccentOverrider.hpp" />
     <ClInclude Include="Architecture\Legacy\GlassFrameIntegrity.hpp" />
@@ -61,6 +66,8 @@
     <ClInclude Include="Architecture\Legacy\GlassIntegrity.hpp" />
     <ClInclude Include="Architecture\Legacy\GlassInfra.hpp" />
     <ClInclude Include="Architecture\Legacy\GlassReflectionBrush.hpp" />
+    <ClInclude Include="Architecture\Legacy\FrameHighlights.hpp" />
+    <ClInclude Include="Architecture\Legacy\HighlightRealizer.hpp" />
     <ClInclude Include="Architecture\Legacy\ReflectionRealizer.hpp" />
     <ClInclude Include="Architecture\Legacy\uDwmProjection.hpp" />
     <ClInclude Include="Architecture\Legacy\uDwmProjection.Offsets.hpp" />
@@ -80,6 +87,8 @@
     <ClCompile Include="Architecture\Legacy\GlassReflectionBrush.cpp" />
     <ClCompile Include="Architecture\Legacy\GlassReflectionHandler.cpp" />
     <ClCompile Include="Architecture\Legacy\GlassRenderer.cpp" />
+    <ClCompile Include="Architecture\Legacy\FrameHighlights.cpp" />
+    <ClCompile Include="Architecture\Legacy\HighlightRealizer.cpp" />
     <ClCompile Include="Architecture\Legacy\ReflectionRealizer.cpp" />
   </ItemGroup>
   <ItemGroup>

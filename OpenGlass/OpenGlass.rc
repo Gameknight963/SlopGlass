@@ -27,6 +27,11 @@ LANGUAGE LANG_NEUTRAL, SUBLANG_DEFAULT
 //
 
 IDB_REFLECTION          PNG                     "reflection.png"
+#if defined(OPENGLASS_DWM_LEGACY)
+IDB_HIGHLIGHT           PNG                     "highlight.png"
+IDB_SIDEHIGHLIGHT       PNG                     "sidehighlight.png"
+IDB_HIGHLIGHT_VISTA     PNG                     "highlight_vista.png"
+#endif
 
 
 /////////////////////////////////////////////////////////////////////////////

@@ -90,6 +90,16 @@ Do not enumerate window properties in the DWM update path to distinguish stored 
 
 Accent owns a separate brush from non-client/client blur. Updating one must not suppress the other's appearance-state refresh.
 
+## Legacy frame highlights
+
+`Architecture/Legacy/FrameHighlights` appends an image-brush drawing instruction to the existing non-client glass visual, using its already clipped frame geometry. It refreshes the brush from the established frame validation hook and retires owner entries at window destruction. Engine cleanup releases the remaining entries after hook removal and rundown. No additional hooks or private projections are required.
+
+The brush carries an OpenGlass-owned opacity marker for appearance state and sheet-of-glass status, a viewport for placement, and frame margins in its viewbox. The renderer recognizes the marker before native draw-list caching, then draws the corner and side bitmaps through `CHighlightRealizer` under the existing geometry clip. Device resources belong to each Legacy renderer context. Theme refresh invalidates texture generations; it does not add locks or alter engine sequencing.
+
+The artwork and rendering approach are adapted from [arceuss/OpenGlass](https://github.com/arceuss/OpenGlass/commit/d8a826e943dba8df498bfaa00b8cb239532bcf6c). This is an approximation, rather than a reconstruction of Windows 7's separate native highlight visuals. Corners mirror at the window midpoint. Side highlights start below the top frame, occupy approximately the upper quarter of the inner height, and are omitted on sheet-of-glass windows. Existing frame geometry supplies maximized and custom-frame clipping, so highlights do not expand beyond glass coverage. Native clone behavior remains in charge of capture; there is no separate restoration of highlights in glass-only Aero Peek clones.
+
+`HighlightStyle` selects bundled Windows 7 (0), bundled Vista (1), theme artwork (2), or disabled (3). Theme mode uses `LEFTHIGHLIGHTCORNERid`/`SIDEHIGHLIGHTid` (95/96 by default), reads active/inactive strips, opacity states, and side sizing margins, and falls back independently to bundled artwork for missing parts. These IDs are theme-authoring conventions, not universal Windows part identities. Settings and decoded theme pixels remain Legacy-private. Highlight visibility is independent of reflection intensity and policy.
+
 ## Caption helpers
 
 `CaptionMetrics.hpp/.cpp` owns caption-button size calculations, while `CaptionText.hpp/.cpp` owns centering, clone-state operations, glow-parameter and DWrite image-bound calculations. Each architecture retains its handler files, settings, resources, transient visual/size unions and state-map instance.

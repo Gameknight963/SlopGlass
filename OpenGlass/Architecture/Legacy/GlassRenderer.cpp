@@ -11,6 +11,7 @@
 #include "D3DGlassRealizer.hpp"
 #include "GlassRenderTarget.hpp"
 #include "ReflectionRealizer.hpp"
+#include "FrameHighlights.hpp"
 #include "MaterialRealizer.hpp"
 #include "D2DPrivates.hpp"
 #include "GlassCoverageSet.hpp"
@@ -55,7 +56,8 @@ namespace OpenGlass::GlassRenderer
 		RenderFlag_SolidColor,
 		RenderFlag_Backdrop,
 		RenderFlag_Material,
-		RenderFlag_Reflection
+		RenderFlag_Reflection,
+		RenderFlag_Highlight
 	};
 
 	struct CDeviceResources
@@ -63,10 +65,12 @@ namespace OpenGlass::GlassRenderer
 		winrt::com_ptr<ID2D1SolidColorBrush> m_brush{};
 		std::variant<std::monostate, CGlassRealizer, CD3DGlassRealizer> m_glassRealizer{};
 		CReflectionRealizer m_reflectionRealizer{};
+		CHighlightRealizer m_highlightRealizer{};
 		CMaterialRealizer m_materialRealizer{};
 	};
 
 	ReflectionContext g_reflectionContext{};
+	HighlightContext g_highlightContext{};
 
 	Shared::GlassType g_type{ Shared::GlassType::Invalid };
 	CAeroParams g_params{};
@@ -79,7 +83,7 @@ namespace OpenGlass::GlassRenderer
 	std::unordered_map<dwmcore::CD2DContext*, CDeviceResources> g_deviceResources{};
 	CDeviceResources* g_currentDeviceResources{};
 	dwmcore::CDrawingContext* g_drawingContextNoRef{};
-	std::bitset<4> g_renderFlag{};
+	std::bitset<5> g_renderFlag{};
 	bool g_colorIsOpaque{};
 	bool g_shapeIsRectangles{};
 	bool g_renderTargetIgnoresAlpha{};
@@ -176,7 +180,8 @@ HRESULT GlassRenderer::MyCRenderData_TryDrawCommandAsDrawList(
 			(
 				HookHelper::get_vftable_from(This->GetResources()->data[command->brushIndex]) == dwmcore::CImageLegacyMilBrush::vftable &&
 				static_cast<dwmcore::CImageLegacyMilBrush*>(This->GetResources()->data[command->brushIndex])->GetImageSource() == nullptr &&
-				wil::rect_is_empty(static_cast<dwmcore::CImageLegacyMilBrush*>(This->GetResources()->data[command->brushIndex])->GetViewbox())
+				(wil::rect_is_empty(static_cast<dwmcore::CImageLegacyMilBrush*>(This->GetResources()->data[command->brushIndex])->GetViewbox()) ||
+					FrameHighlights::IsMarker(static_cast<dwmcore::CImageLegacyMilBrush*>(This->GetResources()->data[command->brushIndex])->GetOpacityValue()))
 			)
 		)
 	)
@@ -369,10 +374,25 @@ HRESULT GlassRenderer::MyCDrawingContext_DrawGeometry(
 			return S_OK;
 		}
 		
-		g_reflectionContext.opacity = opacity;
-		g_reflectionContext.worldTransform = matrix;
-		g_reflectionContext.viewport = &imageBrush->GetViewport();
-		g_renderFlag.set(RenderFlag_Reflection, true);
+		if (FrameHighlights::IsMarker(opacity))
+		{
+			const auto active = FrameHighlights::IsActive(opacity);
+			const auto maximized = FrameHighlights::IsMaximized(opacity);
+			const auto& settings = FrameHighlights::g_settings;
+			g_highlightContext = {
+				matrix->GetD3DMatrix(), matrix->GetD2DMatrix(), &imageBrush->GetViewport(), &imageBrush->GetViewbox(),
+				FrameHighlights::IsSheetOfGlass(opacity), active,
+				maximized && Shared::g_type == Shared::GlassType::Blur ? 0.f : settings.cornerOpacity[(maximized ? 2 : 0) + (active ? 0 : 1)],
+				settings.sideOpacity[active ? 0 : 1] };
+			g_renderFlag.set(RenderFlag_Highlight, true);
+		}
+		else
+		{
+			g_reflectionContext.opacity = opacity;
+			g_reflectionContext.worldTransform = matrix;
+			g_reflectionContext.viewport = &imageBrush->GetViewport();
+			g_renderFlag.set(RenderFlag_Reflection, true);
+		}
 	}
 
 	if (HookHelper::get_vftable_from(brush) == dwmcore::CSolidColorLegacyMilBrush::vftable)
@@ -660,6 +680,14 @@ void GlassRenderer::MyID2D1DeviceContext_FillGeometry(
 			)
 		);
 	}
+	if (g_renderFlag.test(RenderFlag_Highlight))
+	{
+		const auto blend = This->GetPrimitiveBlend();
+		This->SetPrimitiveBlend(D2D1_PRIMITIVE_BLEND_SOURCE_OVER);
+		LOG_IF_FAILED(g_currentDeviceResources->m_highlightRealizer.Render(
+			This, g_rectangleSpan, g_highlightContext, FrameHighlights::g_settings));
+		This->SetPrimitiveBlend(blend);
+	}
 	if (g_renderFlag.test(RenderFlag_Reflection))
 	{
 		const auto primitiveBlendReflection = This->GetPrimitiveBlend();
@@ -700,6 +728,7 @@ void GlassRenderer::Update(GlassEngine::UpdateType type)
 		for (auto& [_, deviceResources] : g_deviceResources)
 		{
 			deviceResources.m_reflectionRealizer.Reset();
+			deviceResources.m_highlightRealizer.Reset();
 			deviceResources.m_materialRealizer.Reset();
 		}
 	}
