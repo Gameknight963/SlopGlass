@@ -1,4 +1,5 @@
 #include "pch.h"
+#include "pch.h"
 #include "AccentOverrider.hpp"
 #include "GlassKernel.hpp"
 #include "uDWMProjection.hpp"
@@ -57,8 +58,9 @@ HRESULT AccentOverrider::MyCAccent_UpdateAccentPolicy(
 	}
 
 	if (
-		policy->AccentState != 3 &&
-		policy->AccentState != 4
+		// only want to override the blur effect
+		policy->AccentState != 3 /*&&
+		policy->AccentState != 4*/
 	)
 	{
 		return g_CAccent_UpdateAccentPolicy_Org(This, rect, policy, geometry);
@@ -66,7 +68,6 @@ HRESULT AccentOverrider::MyCAccent_UpdateAccentPolicy(
 
 	auto accentPolicy = *policy;
 	accentPolicy.AccentState = 1;
-	accentPolicy.dwGradientColor = 0;
 	if (const auto it = g_accentClipRegions.find(This); it != g_accentClipRegions.end() && it->second.clipRegion)
 	{
 		// remove accent border atlas
@@ -127,14 +128,18 @@ HRESULT AccentOverrider::MyCAccent__UpdateSolidFill(
 	// is there any better way to implement it?
 	data->GetClientBlurAttributeReference() |= 8;
 
-	auto effectBrush = GlassEffectBrush::GetOrCreate(window);
+	winrt::com_ptr<uDWM::CSolidColorLegacyMilBrushProxy> effectBrush{ nullptr };
 	const auto maximized = window->TreatAsMaximized(data);
 
 	if (!visual->GetInstructions().views().empty())
 	{
 		winrt::com_ptr<uDWM::CDrawGeometryInstruction> instruction{ nullptr };
 		{
-			const auto drawRect = RectF::ToRectL(reinterpret_cast<uDWM::CSolidRectangleInstruction*>(visual->GetInstructions().views().front())->GetRectangle());
+			const auto solidRectangleInstruction = reinterpret_cast<uDWM::CSolidRectangleInstruction*>(visual->GetInstructions().views().front());
+			const auto drawRect = RectF::ToRectL(solidRectangleInstruction->GetRectangle());
+			auto glassColor = solidRectangleInstruction->GetColor();
+
+			RETURN_IF_FAILED(visual->ClearInstructions());
 			RETURN_IF_FAILED(
 				uDWM::ResourceHelper::CreateGeometryFromHRGN(
 					wil::unique_hrgn{ CreateRectRgnIndirect(&drawRect) }.get(),
@@ -148,17 +153,7 @@ HRESULT AccentOverrider::MyCAccent__UpdateSolidFill(
 						effectBrush.put()
 					)
 				);
-				auto glassColor = Color::sRGBToscRGB(
-					GlassKernel::RealizeWindowColorization(
-						GlassKernel::GetBaseColor(Shared::IsTransparencyDisabled(), maximized),
-						GlassKernel::GetSourceColor(true),
-						GlassKernel::GetColorizationOpacity(true, maximized),
-						Shared::IsTransparencyDisabled(),
-						false
-					).GetEffectivescRGBBlendColor(0.f),
-					0.f
-				);
-				glassColor.a = GlassKernel::AlphaChannelReinterpreter(true, maximized).ToFloat();
+				glassColor.a = GlassKernel::AlphaChannelReinterpreter(true, maximized, true).ToFloat();
 				RETURN_IF_FAILED(effectBrush->Update(1.0, glassColor));
 			}
 
@@ -169,7 +164,6 @@ HRESULT AccentOverrider::MyCAccent__UpdateSolidFill(
 					instruction.put()
 				)
 			);
-			RETURN_IF_FAILED(visual->ClearInstructions());
 			RETURN_IF_FAILED(visual->AddInstruction(instruction.get()));
 		}
 

@@ -414,12 +414,14 @@ HRESULT GlassRenderer::MyCDrawingContext_DrawGeometry(
 			g_renderFlag.set(RenderFlag_Material, true);
 			g_materialContext.opacity = Shared::g_materialIntensity;
 
+			const auto overrideColor = reinterpreter.GetIsAccent() ? std::optional{ Color::scRGBTosRGB(color, 0.f) } : std::nullopt;
 			const auto realizedGlassColorizationParameters = GlassKernel::RealizeWindowColorization(
 				GlassKernel::GetBaseColor(Shared::IsTransparencyDisabled(), maximized),
-				GlassKernel::GetSourceColor(active),
+				GlassKernel::GetSourceColor(active, overrideColor),
 				GlassKernel::GetColorizationOpacity(active, maximized),
 				Shared::IsTransparencyDisabled(),
-				false
+				false,
+				overrideColor
 			);
 			color = realizedGlassColorizationParameters.GetEffectivescRGBBlendColor(sdrBoost);
 			if (!colorSpaceIsScRGB)

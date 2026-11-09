@@ -379,11 +379,11 @@ D2D1_COLOR_F GlassKernel::GetBaseColor(bool opaque, bool maximized)
 
 	return color;
 }
-D2D1_COLOR_F GlassKernel::GetSourceColor(bool active)
+D2D1_COLOR_F GlassKernel::GetSourceColor(bool active, std::optional<D2D1_COLOR_F> overrideColor)
 {
 	if (Shared::g_type == Shared::GlassType::Blur)
 	{
-		const auto& color = active ? Shared::g_color : Shared::g_colorInactive;
+		const auto& color = overrideColor.value_or(active ? Shared::g_color : Shared::g_colorInactive);
 		return
 		{
 			color.r,
@@ -394,11 +394,12 @@ D2D1_COLOR_F GlassKernel::GetSourceColor(bool active)
 	}
 	else if (Shared::g_type == Shared::GlassType::Aero)
 	{
+		const auto& color = overrideColor.value_or(Shared::g_color);
 		return
 		{
-			Shared::g_color.r,
-			Shared::g_color.g,
-			Shared::g_color.b,
+			color.r,
+			color.g,
+			color.b,
 			1.f
 		};
 	}
@@ -459,7 +460,8 @@ GlassKernel::CRealizedGlassColorizationParameters GlassKernel::RealizeWindowColo
 	const D2D1_COLOR_F& srcColor,
 	float colorizationOpacity,
 	bool opaque,
-	bool livePreview
+	bool livePreview,
+	std::optional<D2D1_COLOR_F> overrideColor
 )
 {
 	CRealizedGlassColorizationParameters parameters{};
@@ -486,7 +488,7 @@ GlassKernel::CRealizedGlassColorizationParameters GlassKernel::RealizeWindowColo
 		parameters.afterglowBalance = Shared::g_afterglowBalance * (1.f - baseColor.a);
 		parameters.blurBalance = Shared::g_blurBalance * (1.f - baseColor.a);
 
-		parameters.afterglow = Shared::g_afterglow;
+		parameters.afterglow = overrideColor.value_or(Shared::g_afterglow);
 		parameters.color = srcColor;
 
 		float colorBalance = Shared::g_colorBalance * colorizationOpacity;

@@ -29,6 +29,10 @@ namespace OpenGlass::GlassKernel
 		{
 			return m_flag.test(2);
 		}
+		bool GetIsAccent() const
+		{
+			return m_flag.test(3);
+		}
 		void SetIsActive(bool value)
 		{
 			m_flag.set(1, value);
@@ -36,6 +40,10 @@ namespace OpenGlass::GlassKernel
 		void SetIsMaximized(bool value)
 		{
 			m_flag.set(2, value);
+		}
+		void SetIsAccent(bool value)
+		{
+			m_flag.set(3, value);
 		}
 
 		float ToFloat() const
@@ -53,11 +61,13 @@ namespace OpenGlass::GlassKernel
 		}
 		AlphaChannelReinterpreter(
 			bool active,
-			bool maximized
+			bool maximized,
+			bool accent = false
 		)
 		{
 			SetIsActive(active);
 			SetIsMaximized(maximized);
+			SetIsAccent(accent);
 		}
 	};
 
@@ -76,13 +86,14 @@ namespace OpenGlass::GlassKernel
 	};
 	float GetColorizationOpacity(bool active, bool maximized);
 	D2D1_COLOR_F GetBaseColor(bool opaque, bool maximized);
-	D2D1_COLOR_F GetSourceColor(bool active);
+	D2D1_COLOR_F GetSourceColor(bool active, std::optional<D2D1_COLOR_F> overrideColor = std::nullopt);
 	CRealizedGlassColorizationParameters RealizeWindowColorization(
 		const D2D1_COLOR_F& baseColor,
 		const D2D1_COLOR_F& srcColor,
 		float colorizationOpacity,
 		bool opaque,
-		bool livePreview
+		bool livePreview,
+		std::optional<D2D1_COLOR_F> overrideColor = std::nullopt
 	);
 	float GetAdjustedReflectionIntensity(bool active, bool maximized);
 
